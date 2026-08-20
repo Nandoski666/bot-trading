@@ -191,6 +191,17 @@ python tools/watchdog.py --intervalo 300
 El vigilante corre **al lado** del bot, no dentro. Es deliberado: la mitad de
 lo que hay que vigilar son cosas que ocurren cuando el bot deja de funcionar.
 
+### ¿Está funcionando?
+
+```bash
+python tools/estado.py
+```
+
+Muestra, para cada par, cuál de las cuatro condiciones de entrada se cumple
+ahora mismo y cuál no — con los valores reales que el bot acaba de calcular.
+Es la forma de distinguir «esperando correctamente» de «colgado» durante las
+semanas en las que no pasa nada.
+
 ### Rutina semanal del dry-run
 
 ```bash
@@ -284,6 +295,7 @@ Si nada responde: cierra las posiciones a mano en Binance. Ver
 │   ├── api_freqtrade.py        # cliente REST del bot
 │   ├── kill_switch.py          # cierra todo y detiene
 │   ├── watchdog.py             # heartbeat, límites, resumen diario
+│   ├── estado.py               # qué está viendo el bot ahora mismo
 │   ├── setup_telegram.py       # asistente de configuración de Telegram
 │   └── entrada_journal.py      # entrada semanal del journal con datos reales
 ├── tests/                      # 92 tests

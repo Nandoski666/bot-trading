@@ -63,7 +63,12 @@ vuelva.
 docker compose ps                      # ¿el contenedor está vivo?
 docker compose logs --tail 100         # ¿qué fue lo último que hizo?
 python tools/watchdog.py --once        # heartbeat, límites, estado
+python tools/estado.py                 # qué está viendo el bot y qué le falta
 ```
+
+`estado.py` es el que responde «¿está analizando o está colgado?»: enseña los
+valores de los indicadores que el bot acaba de calcular y cuál de las cuatro
+condiciones de entrada bloquea cada par.
 
 FreqUI: <http://localhost:8080>
 
