@@ -109,6 +109,7 @@ def cargar_estado() -> dict:
         "alertas_enviadas": {},
         "bloqueo_diario_activo": False,
         "kill_switch_disparado": None,
+        "fallos_seguidos": 0,
     }
 
 
@@ -148,16 +149,37 @@ def equity_actual(cliente: ClienteFreqtrade) -> float | None:
         return None
 
 
+# Fallos consecutivos que hacen falta para avisar de que el bot no responde.
+#
+# Con uno solo, cada reinicio de la pila genera una falsa alarma: los
+# contenedores arrancan a la vez y el vigilante pregunta antes de que la API
+# este escuchando. Exigiendo dos pasadas seguidas (2 x 300 s = 10 min) el aviso
+# coincide ademas con el umbral de heartbeat del plan.
+#
+# Una alerta que salta sin motivo se acaba ignorando, y a partir de ese momento
+# deja de proteger de nada.
+FALLOS_ANTES_DE_AVISAR = 2
+
+
 def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict) -> bool:
     """True si el bot esta vivo y procesando."""
     try:
         salud = cliente.salud()
     except ErrorAPI as exc:
+        estado["fallos_seguidos"] = estado.get("fallos_seguidos", 0) + 1
+        seguidos = estado["fallos_seguidos"]
+
+        if seguidos < FALLOS_ANTES_DE_AVISAR:
+            print(f"  heartbeat: sin respuesta ({seguidos}/{FALLOS_ANTES_DE_AVISAR}) — "
+                  "puede ser un reinicio; se espera a la proxima pasada")
+            return False
+
         alerta_una_vez(estado, "bot_caido",
-                       f"🔴 *Bot no responde*\n\n{exc}\n\n"
+                       f"🔴 *Bot no responde*\n\n"
+                       f"{seguidos} comprobaciones seguidas sin respuesta.\n\n{exc}\n\n"
                        "Si hay posiciones abiertas, revisalas en Binance.\n"
                        "Ver `docs/RUNBOOK.md`.")
-        print(f"  heartbeat: SIN RESPUESTA — {exc}")
+        print(f"  heartbeat: SIN RESPUESTA ({seguidos} seguidas) — {exc}")
         return False
 
     marca = salud.get("last_process")
@@ -179,6 +201,7 @@ def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict) -> bool:
         print(f"  heartbeat: ATASCADO — sin ciclo desde hace {silencio:.0f} min")
         return False
 
+    estado["fallos_seguidos"] = 0
     estado["alertas_enviadas"].pop("sin_latido", None)
     estado["alertas_enviadas"].pop("bot_caido", None)
     print(f"  heartbeat: OK (ultimo ciclo hace {silencio:.1f} min)")

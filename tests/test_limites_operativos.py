@@ -278,10 +278,44 @@ def test_modo_simulacion_no_toca_nada(entorno):
 # Heartbeat
 # ===========================================================================
 
-def test_bot_caido_genera_alerta(entorno):
+def test_un_solo_fallo_no_genera_alerta(entorno):
+    """Un fallo aislado es un reinicio, no una caida.
+
+    Los contenedores del bot y del vigilante arrancan a la vez, y el vigilante
+    llega a preguntar antes de que la API este escuchando. Avisar en ese caso
+    manda una falsa alarma en cada reinicio — y una alerta que salta sin motivo
+    se acaba ignorando, momento en el que deja de proteger de nada.
+    """
     bot = BotFalso(vivo=False)
     assert watchdog.pasada(bot, simular=False) == 1
+    avisos = [m for m in entorno["mensajes"] if "no responde" in m.lower()]
+    assert not avisos, "aviso al primer fallo"
+
+
+def test_bot_caido_genera_alerta_tras_dos_fallos(entorno):
+    bot = BotFalso(vivo=False)
+    for _ in range(watchdog.FALLOS_ANTES_DE_AVISAR):
+        watchdog.pasada(bot, simular=False)
     assert any("no responde" in m.lower() for m in entorno["mensajes"])
+
+
+def test_el_contador_de_fallos_se_reinicia_al_recuperarse(entorno):
+    """Un fallo, recuperacion, y otro fallo: no son dos seguidos.
+
+    Sin reiniciar el contador, dos blips separados por horas de funcionamiento
+    normal acabarian disparando la alerta.
+    """
+    bot = BotFalso(vivo=False)
+    watchdog.pasada(bot, simular=False)
+
+    bot.vivo = True
+    watchdog.pasada(bot, simular=False)
+
+    bot.vivo = False
+    watchdog.pasada(bot, simular=False)
+
+    avisos = [m for m in entorno["mensajes"] if "no responde" in m.lower()]
+    assert not avisos, "aviso con fallos no consecutivos"
 
 
 def test_bot_atascado_genera_alerta(entorno):
