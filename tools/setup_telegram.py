@@ -10,13 +10,15 @@ token en `.env` — eso no lo puede hacer un script, y tampoco deberia: el token
 da control total sobre el bot.
 
 Uso:
-    python tools/setup_telegram.py            # asistente completo
-    python tools/setup_telegram.py --probar   # solo comprobar lo ya configurado
+    python tools/setup_telegram.py                # asistente completo
+    python tools/setup_telegram.py --pegar-token  # introducir el token en oculto
+    python tools/setup_telegram.py --probar       # solo comprobar lo configurado
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import re
 import sys
 from pathlib import Path
@@ -66,6 +68,70 @@ def ocultar(token: str) -> str:
     if len(token) < 12:
         return "***"
     return f"{token[:6]}…{token[-4:]}"
+
+
+def pedir_token() -> int:
+    """Pide el token por teclado sin mostrarlo y lo guarda en .env.
+
+    Por que existe este modo en vez de decir "editalo a mano":
+
+      * `getpass` no muestra lo que escribes, asi que el token no queda en la
+        pantalla ni en una captura.
+      * Al no ser un argumento de linea de comandos, no entra en el historial
+        del shell (~/.zsh_history), donde se quedaria en claro para siempre.
+      * No pasa por ningun portapapeles compartido ni por ninguna conversacion.
+
+    El token va directo de tu teclado a .env. Nadie mas lo ve por el camino.
+    """
+    if not ENV.exists():
+        print("No existe .env. Crealo primero:  cp .env.example .env", file=sys.stderr)
+        return 1
+
+    print("""
+Pega el token que te dio @BotFather y pulsa Enter.
+No se vera nada mientras escribes — es lo normal, sigue pegando.
+""")
+    token = getpass.getpass("  TELEGRAM_TOKEN: ").strip().strip('"').strip("'")
+
+    if not token:
+        print("\nNo se introdujo nada. No se ha cambiado el .env.", file=sys.stderr)
+        return 2
+
+    # Forma de un token de Telegram: <id numerico>:<35 caracteres>
+    if not re.fullmatch(r"\d{6,12}:[A-Za-z0-9_-]{30,50}", token):
+        print("\nEso no tiene forma de token de Telegram.\n"
+              "Deberia ser algo como  8123456789:AAH... (unos 35 caracteres mas).\n"
+              "No se ha cambiado el .env.", file=sys.stderr)
+        return 2
+
+    print(f"\n  recibido: {ocultar(token)}")
+    print("  verificando contra la API de Telegram…")
+    info = verificar_token(token)
+    if info is None:
+        print("\n  No se guarda un token que Telegram rechaza.", file=sys.stderr)
+        return 1
+
+    print(f"  bot: @{info.get('username')}  ({info.get('first_name')})")
+    escribir_env("TELEGRAM_TOKEN", token)
+    print("  guardado en .env")
+
+    # Si se cambia el token, el chat ID anterior puede ser de otro bot.
+    anterior = leer_env().get("TELEGRAM_CHAT_ID", "").strip()
+    if anterior:
+        print(f"\n  aviso: .env ya tenia TELEGRAM_CHAT_ID={anterior}.")
+        print("  Si este token es de un bot distinto, ese chat ID no vale. El")
+        print("  asistente lo revisa en el siguiente paso.")
+
+    print(f"""
+Siguiente paso — abre el chat con tu bot y pulsa INICIAR:
+
+    https://t.me/{info.get('username')}
+
+Y luego:
+
+    python tools/setup_telegram.py
+""")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +218,13 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Asistente de configuracion de Telegram")
     p.add_argument("--probar", action="store_true",
                    help="solo verificar lo ya configurado, sin cambiar nada")
+    p.add_argument("--pegar-token", action="store_true",
+                   help="introducir el token por teclado sin que se vea ni quede "
+                        "en el historial del shell")
     args = p.parse_args()
+
+    if args.pegar_token:
+        return pedir_token()
 
     print("=" * 70)
     print("CONFIGURACION DE TELEGRAM")

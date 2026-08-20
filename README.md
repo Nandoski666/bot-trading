@@ -67,8 +67,15 @@ Rellena `.env` con:
 
 ### 2. Telegram
 
-Crea el bot con `@BotFather` (`/newbot`), pega el token en `TELEGRAM_TOKEN`
-dentro de `.env`, y deja que el asistente haga el resto:
+Crea el bot con `@BotFather` (`/newbot`) y mete el token sin que quede en el
+historial del shell:
+
+```bash
+python tools/setup_telegram.py --pegar-token
+```
+
+Luego abre el chat con tu bot, pulsa **Iniciar**, y deja que el asistente
+termine:
 
 ```bash
 python tools/setup_telegram.py

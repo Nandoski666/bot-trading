@@ -264,6 +264,50 @@ docker compose logs | grep -i "balance\|authenticat"
 
 ---
 
+## Síntoma: se filtró el token de Telegram
+
+Cuenta como filtración si el token apareció en **cualquier** sitio que no sea
+tu `.env`: un chat, una captura, un pegado en un issue, el historial del shell,
+un log, un commit.
+
+### Qué puede hacer quien lo tenga
+
+Leer todo lo que le llegue a tu bot y escribir en su nombre. Como el bot está
+autorizado a controlar Freqtrade por Telegram, eso incluye mandarle `/forceexit
+all`, `/stop` o `/start`. **No puede sacar dinero** —los retiros no pasan por
+aquí—, pero sí puede cerrarte posiciones o dejar el bot parado sin que te
+enteres.
+
+### Revocar (30 segundos)
+
+1. En Telegram, a **@BotFather**: `/revoke`
+2. Elige tu bot.
+3. Te da un token nuevo. **El anterior deja de funcionar al instante.**
+
+### Poner el nuevo sin volver a filtrarlo
+
+```bash
+python tools/setup_telegram.py --pegar-token
+```
+
+Lo pide oculto: no se ve al escribir y no entra en `~/.zsh_history`. Después:
+
+```bash
+python tools/setup_telegram.py
+docker compose up -d --force-recreate
+```
+
+> **No pases un token como argumento de un comando.** `export TOKEN=8123...` o
+> `--token 8123...` quedan en claro en el historial del shell, que casi nadie
+> limpia nunca.
+
+### Si sospechas que alguien lo usó
+
+Mira `docker compose logs freqtrade | grep -i telegram`: los comandos recibidos
+quedan registrados. Compara con lo que hiciste tú.
+
+---
+
 ## Síntoma: el dry-run no se parece al backtest
 
 El criterio del plan es una desviación menor al 15%. Por encima, hay una causa
