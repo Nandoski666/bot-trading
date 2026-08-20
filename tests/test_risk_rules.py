@@ -74,7 +74,15 @@ def test_reglas_no_son_hiperoptimizables():
 def test_estrategia_no_expone_parametros_optimizables(estrategia):
     """La baseline no tiene espacio de hyperopt: es la referencia, no el
     resultado de una busqueda. Optimizar la propia linea base la invalidaria
-    como punto de comparacion."""
+    como punto de comparacion.
+
+    `ft_load_hyper_params()` es imprescindible: Freqtrade rellena el registro de
+    parametros en `ft_bot_start()`, no en el constructor. Sin esa llamada,
+    `enumerate_parameters()` devuelve siempre una lista vacia y este test
+    pasaria aunque la estrategia tuviera veinte parametros abiertos. Un test que
+    no puede fallar es peor que no tener test: da confianza sin comprobar nada.
+    """
+    estrategia.ft_load_hyper_params(False)
     optimizables = [nombre for nombre, _ in estrategia.enumerate_parameters()]
     assert optimizables == [], (
         f"la baseline expone parametros optimizables: {optimizables}. "
@@ -433,4 +441,123 @@ def test_hacen_falta_muchas_perdidas_para_el_kill_switch():
     operaciones = R.DRAWDOWN_TOTAL_MAXIMO / R.RIESGO_POR_OPERACION
     assert operaciones >= 15, (
         f"el kill switch saltaria tras solo {operaciones:.0f} perdidas seguidas"
+    )
+
+
+# ===========================================================================
+# La variante optimizable no puede tocar el riesgo
+# ===========================================================================
+
+def test_la_variante_optimizable_solo_expone_parametros_de_senal():
+    """BaselineTrendOpt abre la senal, nunca el riesgo.
+
+    Es la frontera de seguridad del walk-forward. Si el riesgo por operacion o
+    la distancia del stop entraran en el espacio de busqueda, el optimizador
+    descubriria sin falta que arriesgar mas mejora el resultado del backtest —
+    porque en el pasado ya sabemos que la cuenta no quebro. En el futuro no
+    existe esa garantia.
+    """
+    from BaselineTrendOpt import BaselineTrendOpt
+
+    estrategia = BaselineTrendOpt({
+        "stake_currency": "USDT", "max_open_trades": 3, "dry_run": True,
+        "timeframe": "1h", "runmode": "backtest", "exchange": {"name": "binance"},
+    })
+    estrategia.ft_load_hyper_params(False)   # sin esto el registro esta vacio
+    optimizables = {nombre for nombre, _ in estrategia.enumerate_parameters()}
+
+    assert optimizables == {"ema_rapida", "ema_lenta", "rsi_minimo", "rsi_maximo"}, (
+        f"el espacio de busqueda cambio: {sorted(optimizables)}"
+    )
+
+    prohibidos = {"riesgo", "stop", "atr", "drawdown", "perdida", "posicion", "stake"}
+    for nombre in optimizables:
+        assert not any(p in nombre.lower() for p in prohibidos), (
+            f"'{nombre}' parece un parametro de riesgo y esta abierto al optimizador"
+        )
+
+
+def test_la_variante_optimizable_hereda_las_reglas_de_riesgo_sin_tocarlas():
+    """Los callbacks de riesgo son literalmente los mismos objetos."""
+    from BaselineTrend import BaselineTrend
+    from BaselineTrendOpt import BaselineTrendOpt
+
+    assert issubclass(BaselineTrendOpt, BaselineTrend)
+    for metodo in ("custom_stake_amount", "custom_stoploss", "confirm_trade_entry",
+                   "_vela_cerrada_antes_de", "_atr_de_entrada"):
+        assert getattr(BaselineTrendOpt, metodo) is getattr(BaselineTrend, metodo), (
+            f"BaselineTrendOpt sobreescribe {metodo}: el riesgo dejaria de ser "
+            "el mismo que el de la baseline y la comparacion no seria valida"
+        )
+
+    assert BaselineTrendOpt.stoploss == BaselineTrend.stoploss
+    assert BaselineTrendOpt.startup_candle_count == BaselineTrend.startup_candle_count
+    assert BaselineTrendOpt.can_short is False
+
+
+@pytest.mark.parametrize("rapida,lenta,rsi_min,rsi_max,valida", [
+    (20, 50, 40, 70, True),
+    (50, 20, 40, 70, False),   # rapida mas lenta que la lenta
+    (20, 50, 65, 70, False),   # banda de RSI demasiado estrecha
+    (20, 20, 40, 70, False),   # medias iguales: no hay cruce posible
+])
+def test_la_variante_descarta_combinaciones_sin_sentido(rapida, lenta, rsi_min,
+                                                        rsi_max, valida):
+    """El optimizador propone al azar dentro de los rangos; algunas no valen.
+
+    Sin este filtro, una combinacion con la EMA "rapida" mas lenta que la
+    "lenta" produciria senales invertidas, y el optimizador podria quedarse con
+    ella si por casualidad funciono en el tramo de entrenamiento.
+    """
+    from conftest import neutralizar_filtros, serie_con_cruce_alcista
+    from BaselineTrendOpt import BaselineTrendOpt
+
+    estrategia = BaselineTrendOpt({
+        "stake_currency": "USDT", "max_open_trades": 3, "dry_run": True,
+        "timeframe": "1h", "runmode": "backtest", "exchange": {"name": "binance"},
+    })
+    estrategia.ema_rapida.value = rapida
+    estrategia.ema_lenta.value = lenta
+    estrategia.rsi_minimo.value = rsi_min
+    estrategia.rsi_maximo.value = rsi_max
+
+    assert estrategia.combinacion_valida is valida
+
+    if not valida:
+        md = {"pair": "BTC/USDT"}
+        df = neutralizar_filtros(
+            estrategia.populate_indicators(serie_con_cruce_alcista(), md))
+        df = estrategia.populate_entry_trend(df, md)
+        assert int((df["enter_long"] == 1).sum()) == 0, (
+            "una combinacion invalida genero senales de entrada"
+        )
+
+
+def test_el_detector_de_parametros_funciona_de_verdad():
+    """Comprobacion del propio metodo de deteccion.
+
+    Los dos tests anteriores afirman "esta estrategia no tiene parametros" y
+    "esta otra tiene exactamente estos cuatro". Los dos serian verdad tambien si
+    el detector estuviera roto y devolviera siempre vacio — que es justo lo que
+    pasaba antes de llamar a `ft_load_hyper_params()`.
+
+    Este test cierra el circulo: sobre una estrategia con un parametro conocido,
+    el detector tiene que encontrarlo.
+    """
+    from freqtrade.strategy import IntParameter
+
+    from BaselineTrend import BaselineTrend
+
+    class ConParametro(BaselineTrend):
+        canario = IntParameter(1, 10, default=5, space="buy", optimize=True)
+
+    s = ConParametro({
+        "stake_currency": "USDT", "max_open_trades": 3, "dry_run": True,
+        "timeframe": "1h", "runmode": "backtest", "exchange": {"name": "binance"},
+    })
+    s.ft_load_hyper_params(False)
+
+    assert "canario" in {n for n, _ in s.enumerate_parameters()}, (
+        "el detector de parametros no encuentra un parametro que existe: los "
+        "tests que dependen de el no estan comprobando nada"
     )

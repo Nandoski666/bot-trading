@@ -18,7 +18,7 @@ prolongado y criterios go/no-go que no se negocian.
 | T1 | Bootstrap del proyecto | ✅ |
 | T2 | Descarga y validación de datos | ✅ 50.832 velas/par, 0.039 % faltantes |
 | T3 | Estrategia `BaselineTrend` | ✅ `lookahead-analysis`: sin sesgo |
-| T4 | Tests unitarios | ✅ 85 tests |
+| T4 | Tests unitarios | ✅ 92 tests, 94 % de cobertura |
 | T5 | Backtest reproducible | ✅ 237 ops in-sample, con costos |
 | T6 | Walk-forward analysis | ✅ 18 ventanas, 118 ops fuera de muestra |
 | T7 | Reporte de métricas | ✅ |
@@ -250,7 +250,7 @@ Si nada responde: cierra las posiciones a mano en Binance. Ver
 │   ├── api_freqtrade.py        # cliente REST del bot
 │   ├── kill_switch.py          # cierra todo y detiene
 │   └── watchdog.py             # heartbeat, límites, resumen diario
-├── tests/                      # 75 tests
+├── tests/                      # 92 tests
 └── docs/
     ├── STRATEGY.md             # las reglas en español, sin código
     ├── RUNBOOK.md              # qué hacer cuando algo falla
