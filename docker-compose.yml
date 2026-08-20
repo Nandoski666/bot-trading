@@ -1,0 +1,40 @@
+# Bot de trading algorítmico — entorno reproducible
+#
+# Uso:
+#   docker compose run --rm freqtrade --version        # verificar instalación
+#   docker compose up -d                               # levantar el bot (dry-run)
+#   docker compose logs -f                             # ver logs
+#   docker compose down                                # detener
+#
+# Las credenciales NUNCA van en este archivo: se leen de .env (que está en .gitignore).
+
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    container_name: freqtrade
+    restart: unless-stopped
+    # Persistencia: todo el estado vive en user_data/ del host, así sobrevive
+    # a reinicios, recreaciones del contenedor y actualizaciones de imagen.
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    ports:
+      # FreqUI + API REST. Se expone solo en loopback: nunca abrir a internet
+      # sin un reverse proxy con TLS y autenticación.
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env
+    environment:
+      # Freqtrade mapea variables FREQTRADE__<seccion>__<clave> sobre el JSON.
+      # Esto permite inyectar secretos sin escribirlos en config.*.json.
+      - FREQTRADE__EXCHANGE__KEY=${BINANCE_API_KEY:-}
+      - FREQTRADE__EXCHANGE__SECRET=${BINANCE_API_SECRET:-}
+      - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN:-}
+      - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    # Comando por defecto: dry-run. Para live hay que cambiar el config
+    # explícitamente — nunca por accidente.
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/freqtrade.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3.dryrun.sqlite
+      --config /freqtrade/user_data/config.dryrun.json
+      --strategy BaselineTrend

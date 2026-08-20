@@ -1,0 +1,132 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+
+    "//": "DRY-RUN: opera en papel con precios reales del mercado.",
+    "//_riesgo": "max_open_trades y stoploss estan tambien hard-coded en la estrategia.",
+    "dry_run": true,
+    "dry_run_wallet": 1000,
+
+    "max_open_trades": 3,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.99,
+    "amend_last_stake_amount": true,
+    "fiat_display_currency": "USD",
+    "timeframe": "1h",
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "cancel_open_orders_on_exit": false,
+
+    "//_comisiones": "0.1% por lado (taker Binance) + 0.05% de slippage estimado.",
+    "fee": 0.0015,
+
+    "unfilledtimeout": {
+        "entry": 10,
+        "exit": 10,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+
+    "//_pricing": "Entradas y salidas a mercado: prioriza el fill sobre el precio.",
+    "//_pricing_2": "Una orden limit que no llena deja la posicion sin gestionar, que es peor.",
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+
+    "order_types": {
+        "entry": "market",
+        "exit": "market",
+        "emergency_exit": "market",
+        "force_entry": "market",
+        "force_exit": "market",
+        "stoploss": "market",
+        "stoploss_on_exchange": false
+    },
+
+    "exchange": {
+        "name": "binance",
+        "//_claves": "Se inyectan por variables de entorno FREQTRADE__EXCHANGE__KEY/SECRET.",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {},
+        "ccxt_async_config": {},
+        "pair_whitelist": [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT"
+        ],
+        "pair_blacklist": [
+            ".*(BULL|BEAR|UP|DOWN|[1-5]L|[1-5]S)/.*",
+            ".*(BUSD|TUSD|USDC|FDUSD|DAI|PAX|EUR|TRY|BRL)/.*"
+        ]
+    },
+
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+
+    "telegram": {
+        "enabled": true,
+        "//_credenciales": "Se inyectan por FREQTRADE__TELEGRAM__TOKEN / __CHAT_ID.",
+        "token": "",
+        "chat_id": "",
+        "notification_settings": {
+            "status": "on",
+            "warning": "on",
+            "startup": "on",
+            "entry": "on",
+            "entry_fill": "on",
+            "entry_cancel": "on",
+            "exit": "on",
+            "exit_fill": "on",
+            "exit_cancel": "on",
+            "protection_trigger": "on",
+            "protection_trigger_global": "on",
+            "strategy_msg": "on"
+        },
+        "balance_dust_level": 0.01,
+        "reload": true
+    },
+
+    "api_server": {
+        "enabled": true,
+        "//_bind": "Solo loopback. Nunca 0.0.0.0 sin reverse proxy con TLS.",
+        "listen_ip_address": "0.0.0.0",
+        "listen_port": 8080,
+        "verbosity": "error",
+        "enable_openapi": false,
+        "jwt_secret_key": "CAMBIAR-usar FREQTRADE__API_SERVER__JWT_SECRET_KEY",
+        "ws_token": "",
+        "CORS_origins": [],
+        "username": "",
+        "password": ""
+    },
+
+    "bot_name": "baseline-trend-dryrun",
+    "initial_state": "running",
+    "force_entry_enable": false,
+
+    "internals": {
+        "process_throttle_secs": 5,
+        "heartbeat_interval": 60
+    },
+
+    "dataformat_ohlcv": "feather",
+    "db_url": "sqlite:////freqtrade/user_data/tradesv3.dryrun.sqlite",
+
+    "logfile": "user_data/logs/freqtrade.log"
+}

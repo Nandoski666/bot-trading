@@ -1,0 +1,46 @@
+# --- Secretos: lo mas importante de este archivo ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# --- Datos y estado del bot (no versionar: pesados y regenerables) ---
+user_data/data/
+!user_data/data/.gitkeep
+!user_data/data/DATA_REPORT.md
+user_data/backtest_results/
+user_data/hyperopt_results/
+user_data/logs/
+user_data/plot/
+user_data/models/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+
+# --- Configuraciones con credenciales reales ---
+# Se versionan las plantillas config.dryrun.json / config.live.json,
+# pero cualquier variante local con datos propios queda fuera.
+user_data/config.local.json
+user_data/config.private.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- macOS / editores ---
+.DS_Store
+.idea/
+.vscode/
