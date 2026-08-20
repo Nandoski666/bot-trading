@@ -20,19 +20,36 @@ Cierra todas las posiciones a mercado y detiene el bot.
 python tools/kill_switch.py --solo-detener
 ```
 
-Deja de abrir posiciones nuevas. Las abiertas siguen vivas con su stop activo.
-Es la opción correcta cuando quieres parar pero no quieres realizar pérdidas
-en ese momento.
+**Pausa** el bot: deja de abrir posiciones nuevas, pero sigue gestionando las
+abiertas — trailing y stops activos. Es la opción correcta cuando quieres parar
+pero no realizar pérdidas en ese momento.
 
 **Desde Telegram** (funciona aunque no tengas acceso al servidor):
 
 | Comando | Qué hace |
 |---|---|
-| `/stop` | Deja de abrir posiciones |
+| `/pause` | Deja de abrir. **Sigue gestionando** las abiertas. |
 | `/forceexit all` | Cierra todas las posiciones a mercado |
+| `/stop` | Para el bot **del todo** — ver el aviso de abajo |
 | `/status` | Posiciones abiertas y su P&L |
 | `/profit` | Resumen de resultados |
 | `/start` | Reanuda la apertura de posiciones |
+
+> ### `/pause` y `/stop` no son lo mismo
+>
+> - **`/pause`** → estado PAUSED. El bot sigue su ciclo: vigila stops, mueve el
+>   trailing y ejecuta las salidas. Solo deja de entrar.
+> - **`/stop`** → estado STOPPED. El bot deja de procesar. **Las posiciones
+>   abiertas quedan sin gestionar:** nadie mueve el trailing ni ejecuta el stop.
+>   En live solo sobreviven porque `stoploss_on_exchange` deja la orden puesta
+>   en Binance. En dry-run quedan completamente desatendidas.
+>
+> Además, con el trader detenido la API **rechaza `forceexit`**
+> (`trader is not running`). Por eso `kill_switch.py` pausa primero, cierra
+> después, y solo detiene al final, cuando ya no queda nada que gestionar.
+>
+> Regla práctica: **usa `/pause` casi siempre.** `/stop` solo cuando no haya
+> posiciones abiertas.
 
 **Si nada de esto responde:** entra a Binance por la web y cierra las
 posiciones a mano. Es siempre la opción disponible. No esperes a que el bot
@@ -289,7 +306,8 @@ make lookahead
 
 ### Pérdida diaria (3%)
 
-El bot deja de abrir posiciones. Las abiertas siguen con su stop.
+El bot queda **pausado**: no abre posiciones nuevas, pero sigue gestionando las
+abiertas (trailing y stop activos).
 
 **No se reactiva solo, y es a propósito.** Antes de `/start`:
 

@@ -187,7 +187,7 @@ riesgo, nunca aumentarlo.
 |---|---|---|
 | Riesgo por operación | 0.5% | — |
 | Posiciones a la vez | 3 | No se abren más |
-| Pérdida en un día | 3% | Deja de abrir. Solo se reactiva a mano. |
+| Pérdida en un día | 3% | Pausa: deja de abrir, sigue gestionando lo abierto. Solo se reactiva a mano. |
 | Caída desde el máximo | 10% | Kill switch: cierra todo y se apaga |
 | Apalancamiento | 0 | — |
 

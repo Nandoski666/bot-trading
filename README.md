@@ -18,9 +18,9 @@ prolongado y criterios go/no-go que no se negocian.
 | T1 | Bootstrap del proyecto | ✅ |
 | T2 | Descarga y validación de datos | ✅ 50.832 velas/par, 0.039 % faltantes |
 | T3 | Estrategia `BaselineTrend` | ✅ `lookahead-analysis`: sin sesgo |
-| T4 | Tests unitarios | ✅ 75 tests, 95 % de cobertura |
+| T4 | Tests unitarios | ✅ 85 tests |
 | T5 | Backtest reproducible | ✅ 237 ops in-sample, con costos |
-| T6 | Walk-forward analysis | ✅ 18 ventanas |
+| T6 | Walk-forward analysis | ✅ 18 ventanas, 118 ops fuera de muestra |
 | T7 | Reporte de métricas | ✅ |
 | T8 | Configuración dry-run | ✅ configs listas · falta correr 24 h |
 | T9 | Kill switch y límites | ✅ |
@@ -94,6 +94,28 @@ Backtest in-sample (2021-01-01 → 2024-06-30), **con 0.15 % de coste por lado**
 | Max drawdown | 17.45 % | 76.63 % | < 20 % ✅ |
 | Sharpe | −1.79 | 0.61 | > 1.0 ❌ |
 | Calmar | −0.30 | 0.26 | ganar a B&H ❌ |
+
+### Walk-forward (T6) — 18 ventanas de 12 meses train + 3 de test
+
+Encadenando los 18 tramos de prueba se obtienen **118 operaciones enteramente
+fuera de muestra**, entre 2022-01 y 2026-07:
+
+| | Operaciones | Profit factor |
+|---|---:|---:|
+| Entrenamiento (dentro de muestra) | 520 | 0.42 |
+| Prueba (fuera de muestra) | 118 | 0.36 |
+
+Degradación agregada: **14.0 %**, por debajo del umbral del 40 %. **Y aun así no
+pasa.** Los dos profit factors están por debajo de 1.0: la estrategia pierde
+dinero dentro *y* fuera de muestra. La degradación es baja porque no se puede
+caer mucho desde el suelo, no porque el sistema generalice.
+
+El problema no es sobreajuste. Es más básico: la estrategia no funciona ni
+siquiera donde se ajustaron sus parámetros.
+
+El reporte completo está en
+`user_data/backtest_results/walk_forward/WALK_FORWARD_REPORT.md`, con la curva
+de equity concatenada de los tramos fuera de muestra.
 
 **Veredicto: no pasa a live.** Los criterios no se ajustan para que pase.
 

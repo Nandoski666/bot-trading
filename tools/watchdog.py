@@ -11,8 +11,10 @@ Que comprueba en cada pasada
 ----------------------------
 1. **Heartbeat** — si el bot lleva mas de 10 minutos sin cerrar un ciclo, o si
    no responde, avisa por Telegram.
-2. **Perdida diaria** — al superar el 3 % del equity de inicio del dia, detiene
-   la apertura de posiciones nuevas. Las abiertas siguen con su stop.
+2. **Perdida diaria** — al superar el 3 % del equity de inicio del dia, PAUSA
+   el bot: deja de abrir, pero sigue gestionando las posiciones abiertas. Se
+   usa `/pause` y no `/stop` a proposito: un bot detenido deja de mover el
+   trailing y de ejecutar los stops de lo que ya tiene abierto.
 3. **Drawdown total** — al superar el 10 % desde el maximo historico de equity,
    dispara el kill switch: cierra todo y detiene el bot.
 4. **Resumen diario** — una vez al dia envia por Telegram el estado de la cuenta.
@@ -196,8 +198,8 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
             estado["bloqueo_diario_activo"] = False
             enviar_telegram(
                 "🟢 *Nuevo dia*\n\nSe levanta el bloqueo por perdida diaria.\n"
-                "El bot puede volver a abrir posiciones — arrancalo con `/start` "
-                "si sigue detenido.")
+                "El bot puede volver a abrir posiciones — mandale `/start` "
+                "si sigue pausado.")
         print(f"  dia nuevo: equity de referencia {equity:,.2f}")
         return True
 
@@ -217,22 +219,26 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
     mensaje = (f"🟠 *Limite de perdida diaria alcanzado*\n\n"
                f"Perdida hoy: *{variacion:.2%}* (limite {PERDIDA_DIARIA_MAXIMA:.0%})\n"
                f"Equity: {equity:,.2f} (inicio del dia: {referencia:,.2f})\n\n"
-               "El bot deja de abrir posiciones. Las abiertas siguen con su stop.\n"
+               "El bot queda *pausado*: no abrira posiciones nuevas, pero sigue "
+               "gestionando las abiertas (trailing y stop activos).\n"
                "*No se reactiva solo:* revisa que paso antes de darle a `/start`.")
     print(f"  LIMITE DIARIO SUPERADO ({variacion:.2%})")
 
     if simular:
-        print("  [simulacion] se habria detenido el bot")
+        print("  [simulacion] se habria pausado el bot")
         return False
 
+    # PAUSAR, no detener: las posiciones abiertas tienen que seguir
+    # gestionandose. Un bot detenido no mueve el trailing ni ejecuta los stops,
+    # y el limite diario se convertiria en un riesgo mayor que el que evita.
     try:
-        cliente.detener()
+        cliente.pausar()
         estado["bloqueo_diario_activo"] = True
         enviar_telegram(mensaje)
-        print("  bot detenido (no abrira posiciones nuevas)")
+        print("  bot pausado (no abrira posiciones; las abiertas siguen gestionadas)")
     except ErrorAPI as exc:
-        enviar_telegram(f"🔴 *No se pudo detener el bot*\n\n{mensaje}\n\nError: {exc}")
-        print(f"  ERROR al detener: {exc}", file=sys.stderr)
+        enviar_telegram(f"🔴 *No se pudo pausar el bot*\n\n{mensaje}\n\nError: {exc}")
+        print(f"  ERROR al pausar: {exc}", file=sys.stderr)
     return False
 
 
@@ -278,8 +284,12 @@ def comprobar_drawdown(cliente: ClienteFreqtrade, estado: dict,
     estado["kill_switch_disparado"] = datetime.now(timezone.utc).isoformat(
         timespec="seconds")
 
+    # Se le pasa la URL explicitamente: cuando el vigilante corre en su propio
+    # contenedor, `127.0.0.1` es el vigilante y no el bot. Sin esto, el kill
+    # switch fallaria justo en el momento en que hace falta.
     r = subprocess.run(
-        [sys.executable, str(RAIZ / "tools" / "kill_switch.py"), "--confirm",
+        [sys.executable, str(RAIZ / "tools" / "kill_switch.py"),
+         "--url", cliente.base_url, "--confirm",
          "--motivo", f"drawdown {drawdown:.2%} > {DRAWDOWN_TOTAL_MAXIMO:.0%}"],
         cwd=RAIZ, capture_output=True, text=True)
     print("  " + "\n  ".join(r.stdout.splitlines()[-8:]))

@@ -52,7 +52,10 @@ class ClienteFreqtrade:
                  usuario: str | None = None, clave: str | None = None,
                  timeout: int = 15):
         cargar_env()
-        self.url = url.rstrip("/") + "/api/v1"
+        # Se guardan las dos: `base_url` es la que hay que pasarle a otras
+        # herramientas (kill_switch.py), y `url` la que usa este cliente.
+        self.base_url = url.rstrip("/")
+        self.url = self.base_url + "/api/v1"
         self.timeout = timeout
         self.auth = (
             usuario or os.environ.get("FREQTRADE__API_SERVER__USERNAME", "freqtrader"),
@@ -112,8 +115,31 @@ class ClienteFreqtrade:
         return self._peticion("GET", "trades", params={"limit": limite})
 
     # --- Escritura -------------------------------------------------------
+    def pausar(self) -> dict:
+        """Deja de abrir posiciones nuevas, pero SIGUE gestionando las abiertas.
+
+        Es la operacion que hace falta casi siempre, y no `detener()`. La
+        diferencia importa:
+
+          * `pausar()`  -> estado PAUSED. El bot sigue su ciclo: vigila stops,
+                           aplica el trailing y ejecuta las salidas. Solo deja
+                           de entrar. Ademas `forceexit` sigue funcionando.
+          * `detener()` -> estado STOPPED. El bot deja de procesar del todo.
+                           Las posiciones abiertas quedan SIN GESTIONAR: nadie
+                           mueve el trailing ni ejecuta el stop. En dry-run eso
+                           las deja desnudas; en live solo sobreviven si
+                           `stoploss_on_exchange` esta activado.
+        """
+        return self._peticion("POST", "pause")
+
     def detener(self) -> dict:
-        """Deja de abrir posiciones nuevas. Las abiertas se siguen gestionando."""
+        """Detiene el bot por completo.
+
+        OJO: con el bot detenido, las posiciones abiertas dejan de gestionarse y
+        la API rechaza `forceexit`. Usar solo cuando ya no queda nada abierto —
+        o cuando se quiere parar todo a sabiendas. Para el caso habitual de
+        "que no abra mas", usar `pausar()`.
+        """
         return self._peticion("POST", "stop")
 
     def arrancar(self) -> dict:

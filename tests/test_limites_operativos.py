@@ -40,8 +40,10 @@ class BotFalso:
     """Sustituto del bot: equity manipulable y registro de lo que se le pidio."""
 
     def __init__(self, equity: float = 10_000.0, vivo: bool = True):
+        self.base_url = "http://127.0.0.1:8080"
         self.equity = equity
         self.vivo = vivo
+        self.pausado = False
         self.detenido = False
         self.posiciones: list[dict] = []
         self.ultimo_ciclo = datetime.now(timezone.utc)
@@ -70,6 +72,11 @@ class BotFalso:
         return {"data": [{"abs_profit": 0.0, "trade_count": 0}]}
 
     # --- escritura ---
+    def pausar(self) -> dict:
+        self.llamadas.append("pausar")
+        self.pausado = True
+        return {"status": "pausado"}
+
     def detener(self) -> dict:
         self.llamadas.append("detener")
         self.detenido = True
@@ -121,7 +128,7 @@ def test_racha_de_perdidas_detiene_el_bot_en_el_umbral_diario(entorno):
 
     # Primera pasada: fija la referencia del dia.
     watchdog.pasada(bot, simular=False)
-    assert not bot.detenido
+    assert not bot.pausado
 
     perdida_por_operacion = equity_inicial * RIESGO_POR_OPERACION   # 50 USDT
     operaciones_hasta_el_limite = int(PERDIDA_DIARIA_MAXIMA / RIESGO_POR_OPERACION)  # 6
@@ -132,17 +139,17 @@ def test_racha_de_perdidas_detiene_el_bot_en_el_umbral_diario(entorno):
 
         perdida_acumulada = (equity_inicial - bot.equity) / equity_inicial
         if perdida_acumulada < PERDIDA_DIARIA_MAXIMA:
-            assert not bot.detenido, (
-                f"el bot se detuvo tras {n} perdidas ({perdida_acumulada:.2%}), "
+            assert not bot.pausado, (
+                f"el bot se pauso tras {n} perdidas ({perdida_acumulada:.2%}), "
                 f"antes del umbral del {PERDIDA_DIARIA_MAXIMA:.0%}"
             )
         else:
-            assert bot.detenido, (
-                f"el bot NO se detuvo con una perdida del {perdida_acumulada:.2%}, "
+            assert bot.pausado, (
+                f"el bot NO se pauso con una perdida del {perdida_acumulada:.2%}, "
                 f"por encima del umbral del {PERDIDA_DIARIA_MAXIMA:.0%}"
             )
 
-    assert bot.detenido
+    assert bot.pausado
     assert any("perdida diaria" in m.lower() for m in entorno["mensajes"]), \
         "no se aviso por Telegram del limite diario"
 
@@ -155,7 +162,7 @@ def test_el_limite_diario_no_salta_justo_por_debajo(entorno):
     bot.equity = 10_000.0 * (1 - (PERDIDA_DIARIA_MAXIMA - 0.0001))
     watchdog.pasada(bot, simular=False)
 
-    assert not bot.detenido
+    assert not bot.pausado
 
 
 def test_el_bloqueo_diario_no_se_repite(entorno):
@@ -263,7 +270,7 @@ def test_modo_simulacion_no_toca_nada(entorno):
     bot.equity = 5_000.0    # -50 %: dispararia todo
     watchdog.pasada(bot, simular=True)
 
-    assert not bot.detenido, "se detuvo el bot en modo simulacion"
+    assert not bot.pausado, "se detuvo el bot en modo simulacion"
     assert not entorno["kill_switch"], "se disparo el kill switch en modo simulacion"
 
 
@@ -351,3 +358,50 @@ def test_el_kill_switch_queda_enclavado(entorno):
 
     estado = json.loads(watchdog.ESTADO.read_text())
     assert estado["kill_switch_disparado"], "no quedo constancia del disparo"
+
+
+def test_el_kill_switch_recibe_la_url_del_bot(entorno):
+    """El vigilante le pasa la URL al kill switch, no asume 127.0.0.1.
+
+    Cuando el vigilante corre en su propio contenedor —que es como se despliega
+    en el docker-compose— `127.0.0.1` es el vigilante, no el bot. Sin la URL
+    explicita, el kill switch fallaria exactamente en el momento en que hace
+    falta que funcione.
+    """
+    bot = BotFalso(equity=10_000.0)
+    bot.base_url = "http://freqtrade:8080"
+
+    watchdog.pasada(bot, simular=False)
+    bot.equity = 8_000.0
+    watchdog.pasada(bot, simular=False)
+
+    assert entorno["kill_switch"], "no se disparo el kill switch"
+    comando = entorno["kill_switch"][0]
+    assert "--url" in comando, "el kill switch se invoco sin --url"
+    assert comando[comando.index("--url") + 1] == "http://freqtrade:8080"
+
+
+def test_el_limite_diario_pausa_pero_no_detiene(entorno):
+    """El limite diario usa `/pause`, nunca `/stop`.
+
+    La diferencia no es de matiz. Con el bot en STOPPED, Freqtrade deja de
+    procesar: nadie mueve el trailing ni ejecuta los stops de las posiciones ya
+    abiertas. Un cortacircuitos que apaga la gestion del riesgo justo despues de
+    un dia malo empeora exactamente la situacion que pretende contener.
+
+    Se comprobo contra un bot real: con el trader detenido, la API ademas
+    rechaza `forceexit` con "trader is not running".
+    """
+    bot = BotFalso(equity=10_000.0)
+    watchdog.pasada(bot, simular=False)
+
+    bot.equity = 9_600.0    # -4 %: supera el limite diario
+    watchdog.pasada(bot, simular=False)
+
+    assert bot.pausado, "no se pauso el bot al superar el limite diario"
+    assert not bot.detenido, (
+        "se uso /stop en vez de /pause: las posiciones abiertas quedarian "
+        "sin gestionar"
+    )
+    assert "pausar" in bot.llamadas
+    assert "detener" not in bot.llamadas

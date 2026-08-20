@@ -357,7 +357,20 @@ def escribir_reporte(resultados: list[Resultado], destino: Path,
     # El veredicto se toma sobre la cifra agregada, que es la unica robusta
     # cuando las ventanas individuales tienen pocas operaciones.
     principal = agregada["degradacion"] if agregada else media
-    aprueba = principal is not None and principal < UMBRAL_DEGRADACION
+
+    # --- La trampa del criterio de degradacion ------------------------------
+    # Una degradacion baja solo significa algo si el entrenamiento produjo algo
+    # que valiera la pena conservar. Un sistema con profit factor 0.42 dentro de
+    # muestra y 0.36 fuera "solo se degrada un 14 %" — porque no se puede caer
+    # mucho desde el suelo. Leer eso como aprobado seria dar luz verde a un
+    # sistema que pierde dinero en las dos muestras.
+    #
+    # Por eso el criterio se declara NO APLICABLE cuando el entrenamiento ya es
+    # perdedor. Un umbral de seguridad que da verde sobre un sistema roto es
+    # peor que no tener umbral: transmite una confianza que no existe.
+    entrenamiento_rentable = agregada is not None and agregada["pf_train"] > 1.0
+    aplicable = agregada is not None and entrenamiento_rentable
+    aprueba = aplicable and principal < UMBRAL_DEGRADACION
 
     L: list[str] = []
     a = L.append
@@ -373,16 +386,37 @@ def escribir_reporte(resultados: list[Resultado], destino: Path,
     a("## Veredicto\n")
     if principal is None:
         a("**INDETERMINADO** — no hubo operaciones suficientes para medir nada.\n")
+    elif not entrenamiento_rentable:
+        a(f"**NO APLICABLE — y eso es peor que no pasar.**\n")
+        a(f"La degradacion agregada es **{principal:.1%}**, por debajo del umbral "
+          f"del {UMBRAL_DEGRADACION:.0%}. Tomada sola, esa cifra diria «pasa». "
+          f"No lo hace, y conviene entender por que:\n")
+        a(f"| | Operaciones | Profit factor |")
+        a("|---|---:|---:|")
+        a(f"| Entrenamiento | {agregada['ops_train']} | **{fmt(agregada['pf_train'])}** |")
+        a(f"| Prueba | {agregada['ops_test']} | **{fmt(agregada['pf_test'])}** |")
+        a("")
+        a("**Los dos estan por debajo de 1.0: la estrategia pierde dinero dentro y "
+          "fuera de muestra.** La degradacion es baja porque no se puede caer mucho "
+          "desde el suelo, no porque el sistema generalice bien.\n")
+        a("El criterio de degradacion mide *cuanto de lo aprendido sobrevive fuera "
+          "de muestra*. Si no se aprendio nada rentable, la pregunta no tiene "
+          "sentido — como medir la fidelidad de una copia de un original en blanco.\n")
+        a("**Conclusion: la estrategia no avanza a dry-run.** No por sobreajuste, "
+          "sino por algo mas basico: no funciona ni siquiera en los datos donde se "
+          "ajustaron sus parametros.\n")
     elif aprueba:
         a(f"**PASA** — degradacion agregada train → test: **{principal:.1%}** "
-          f"(umbral: {UMBRAL_DEGRADACION:.0%}).\n")
+          f"(umbral: {UMBRAL_DEGRADACION:.0%}), con un profit factor de "
+          f"entrenamiento de {fmt(agregada['pf_train'])} (> 1.0, condicion previa "
+          "para que la degradacion signifique algo).\n")
     else:
         a(f"**NO PASA** — degradacion agregada train → test: **{principal:.1%}**, "
           f"por encima del umbral del {UMBRAL_DEGRADACION:.0%}.\n")
         a("Segun la definicion de hecho del ticket T6, la estrategia esta "
           "sobreajustada y **no avanza a dry-run**.\n")
 
-    if agregada:
+    if agregada and entrenamiento_rentable:
         a("### Como se calcula esta cifra\n")
         a("Sumando las ganancias y perdidas brutas de **todos** los tramos por "
           "separado, y comparando un unico profit factor de cada lado:\n")
@@ -679,9 +713,13 @@ def finalizar(resultados: list[Resultado], args) -> int:
     print("=" * 78)
     if media is None:
         print("Degradacion: INDETERMINADA")
-    else:
+    elif aprueba:
         print(f"Degradacion agregada train → test: {media:.1%} "
-              f"(umbral {UMBRAL_DEGRADACION:.0%}) — {'PASA' if aprueba else 'NO PASA'}")
+              f"(umbral {UMBRAL_DEGRADACION:.0%}) — PASA")
+    else:
+        print(f"Degradacion agregada train → test: {media:.1%} — NO PASA")
+        print("Ver el veredicto completo en el reporte: una degradacion baja sobre "
+              "un entrenamiento perdedor no es una aprobacion.")
     print(f"Reporte: {reporte.relative_to(RAIZ)}")
     return 0 if aprueba else 4
 

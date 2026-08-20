@@ -11,13 +11,24 @@ Cuando se usa
 
 Orden de las operaciones
 ------------------------
-1. **Detener** el bot primero. Si se cerraran las posiciones antes, el bot
-   podria abrir una nueva en el mismo ciclo y el kill switch dejaria la cuenta
-   con exposicion despues de haberla "cerrado".
-2. Cerrar todas las posiciones a mercado.
-3. Verificar que no queda ninguna abierta, y decirlo explicitamente si queda.
+1. **Pausar** — el bot deja de abrir posiciones pero sigue funcionando.
+2. **Cerrar** todas las posiciones a mercado.
+3. **Verificar** que no queda ninguna abierta.
+4. **Detener** el bot del todo.
 
-El paso 3 importa: un cierre parcial que se reporta como exito es peor que un
+El orden no es cosmetico, y se aprendio probandolo contra un bot real:
+
+  * Cerrar antes de pausar deja una ventana en la que el bot puede volver a
+    entrar, y el kill switch terminaria con la cuenta expuesta despues de
+    haberla "cerrado".
+  * Detener (`/stop`) antes de cerrar **no funciona**: Freqtrade rechaza
+    `forceexit` con el trader detenido ("trader is not running"). Y aunque lo
+    aceptara, un bot detenido deja de gestionar las posiciones abiertas — nadie
+    mueve el trailing ni ejecuta el stop.
+
+`/pause` es el estado intermedio que hace falta: no entra, pero sigue vivo.
+
+El paso 3 importa aparte: un cierre parcial reportado como exito es peor que un
 fallo, porque nadie vuelve a mirar.
 
 Uso:
@@ -72,7 +83,7 @@ def main() -> int:
     p.add_argument("--confirm", action="store_true",
                    help="ejecutar sin pedir confirmacion (para automatizacion)")
     p.add_argument("--solo-detener", action="store_true",
-                   help="dejar de abrir posiciones sin cerrar las existentes")
+                   help="pausar (dejar de abrir) sin cerrar las posiciones abiertas")
     p.add_argument("--motivo", default="disparo manual",
                    help="queda registrado en la salida y en el log")
     args = p.parse_args()
@@ -102,34 +113,37 @@ def main() -> int:
     print()
 
     if not args.confirm:
-        accion = ("DETENER el bot" if args.solo_detener
-                  else f"DETENER el bot y CERRAR {len(abiertas)} posiciones a mercado")
+        accion = ("PAUSAR el bot (no abrira mas posiciones)" if args.solo_detener
+                  else f"PAUSAR el bot y CERRAR {len(abiertas)} posiciones a mercado")
         respuesta = input(f"Se va a {accion}. Escribe 'si' para continuar: ")
         if respuesta.strip().lower() not in ("si", "sí", "s", "yes", "y"):
             print("Cancelado. No se ha tocado nada.")
             return 2
         print()
 
-    # --- Paso 1: detener el bot ---------------------------------------------
-    # Primero esto, siempre. Cerrar antes de detener deja una ventana en la que
-    # el bot puede volver a entrar.
-    print("[1/3] Deteniendo el bot (no abrira posiciones nuevas)…")
+    # --- Paso 1: pausar -----------------------------------------------------
+    # Pausar y no detener: en PAUSED el bot no entra, pero sigue gestionando las
+    # posiciones abiertas y la API acepta forceexit. Detenerlo aqui romperia el
+    # paso 2.
+    print("[1/4] Pausando el bot (no abrira posiciones nuevas)…")
     try:
-        r = cliente.detener()
-        print(f"      {r.get('status', 'detenido')}")
+        r = cliente.pausar()
+        print(f"      {r.get('status', 'pausado')}")
     except ErrorAPI as exc:
-        print(f"      ERROR al detener: {exc}", file=sys.stderr)
+        print(f"      ERROR al pausar: {exc}", file=sys.stderr)
         print("      Se continua con el cierre: las posiciones son mas urgentes.",
               file=sys.stderr)
 
     if args.solo_detener:
-        print("\nModo --solo-detener: las posiciones abiertas siguen vivas y con su "
-              "stop activo.\nPara cerrarlas: python tools/kill_switch.py --confirm")
+        print("\nModo --solo-detener: el bot queda PAUSADO. Las posiciones abiertas\n"
+              "siguen gestionandose (trailing y stop activos), pero no se abriran\n"
+              "nuevas.\n\nPara cerrarlas:  python tools/kill_switch.py --confirm\n"
+              "Para reanudar:   /start desde Telegram")
         return 0
 
     # --- Paso 2: cerrar todo ------------------------------------------------
     if abiertas:
-        print(f"[2/3] Cerrando {len(abiertas)} posiciones a mercado…")
+        print(f"[2/4] Cerrando {len(abiertas)} posiciones a mercado…")
         try:
             r = cliente.cerrar_todo()
             print(f"      {r.get('result', r)}")
@@ -138,12 +152,12 @@ def main() -> int:
             print("      CIERRA LAS POSICIONES A MANO EN BINANCE AHORA.", file=sys.stderr)
             return 1
     else:
-        print("[2/3] No hay posiciones que cerrar.")
+        print("[2/4] No hay posiciones que cerrar.")
 
     # --- Paso 3: verificar --------------------------------------------------
     # Las ordenes a mercado tardan un instante en confirmarse. Se comprueba de
     # verdad en vez de asumir que salio bien.
-    print("[3/3] Verificando…")
+    print("[3/4] Verificando…")
     for intento in range(1, 7):
         time.sleep(2)
         try:
@@ -153,6 +167,17 @@ def main() -> int:
             return 1
         if not quedan:
             print("      confirmado: 0 posiciones abiertas.")
+
+            # --- Paso 4: ahora si, detener del todo -------------------------
+            # Ya no queda nada que gestionar, asi que STOPPED es seguro.
+            print("[4/4] Deteniendo el bot…")
+            try:
+                r = cliente.detener()
+                print(f"      {r.get('status', 'detenido')}")
+            except ErrorAPI as exc:
+                print(f"      aviso: no se pudo detener ({exc}). El bot queda "
+                      "pausado, que ya impide abrir posiciones.", file=sys.stderr)
+
             print()
             print("=" * 70)
             print("KILL SWITCH COMPLETADO — el bot esta detenido y sin exposicion.")

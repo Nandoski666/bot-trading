@@ -38,3 +38,36 @@ services:
       --db-url sqlite:////freqtrade/user_data/tradesv3.dryrun.sqlite
       --config /freqtrade/user_data/config.dryrun.json
       --strategy BaselineTrend
+
+  # ---------------------------------------------------------------------------
+  # Vigilante (T9): heartbeat, limite de perdida diaria, kill switch por
+  # drawdown y resumen diario por Telegram.
+  #
+  # Corre en un contenedor APARTE del bot, a proposito. La mitad de lo que tiene
+  # que vigilar son cosas que ocurren cuando el bot deja de funcionar: si
+  # viviera dentro del mismo proceso, el caso mas importante —que el bot muera—
+  # seria justo el que no podria detectar.
+  # ---------------------------------------------------------------------------
+  watchdog:
+    image: freqtradeorg/freqtrade:stable
+    container_name: freqtrade-watchdog
+    restart: unless-stopped
+    depends_on:
+      - freqtrade
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+      - "./tools:/freqtrade/tools:ro"
+      - "./.env:/freqtrade/.env:ro"
+    env_file:
+      - .env
+    environment:
+      # El vigilante habla con el bot por la red interna de Compose, no por
+      # localhost: cada contenedor tiene el suyo.
+      - FREQTRADE_API_URL=http://freqtrade:8080
+    entrypoint: ["python"]
+    command:
+      - "/freqtrade/tools/watchdog.py"
+      - "--url"
+      - "http://freqtrade:8080"
+      - "--intervalo"
+      - "300"
