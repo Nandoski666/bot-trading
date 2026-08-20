@@ -118,14 +118,118 @@ decidirlo con las peores condiciones posibles.)
 
 ---
 
+---
+
+## Ejemplo de una semana rellena
+
+> ### ⚠️ DATOS FICTICIOS — no son resultados de este bot
+>
+> Esto es solo para ver el formato con números dentro. **Nada de aquí ocurrió.**
+> Las entradas reales van más abajo, bajo «Entradas», y sus números salen
+> siempre de la base de datos con `python tools/entrada_journal.py`, nunca
+> escritos a mano.
+>
+> Copiar cifras inventadas a la bitácora la inutiliza: dentro de un mes estarías
+> comparando el dry-run contra una línea base que nunca existió, y la desviación
+> que mide el criterio del 15 % dejaría de significar nada.
+
+<details>
+<summary><b>Ver el ejemplo</b> (semana ficticia, sistema perdiendo — que es lo esperado)</summary>
+
+### Semana del 2026-09-14 · FICTICIA
+
+**Fase:** dry-run
+**Estado del bot:** corrió sin interrupciones, 0 reinicios
+
+#### Números
+
+| | |
+|---|---|
+| Operaciones cerradas | 4 |
+| Ganadoras / perdedoras | 1 / 3 |
+| P&L de la semana | −11.40 USDT (−1.14 %) |
+| P&L acumulado | −23.80 USDT (−2.38 %) |
+| Drawdown máximo esta semana | 1.62 % |
+| Equity actual | 976.20 USDT |
+| Posiciones abiertas al cierre | 1 |
+| Operaciones desde el inicio | 9 |
+
+| Par | Cierre | Resultado | Motivo de salida |
+|---|---|---:|---|
+| SOL/USDT | 2026-09-15 08:00 | −1.94 % | stop_loss |
+| BTC/USDT | 2026-09-16 22:00 | +2.71 % | trailing_stop_loss |
+| ETH/USDT | 2026-09-18 03:00 | −1.88 % | stop_loss |
+| SOL/USDT | 2026-09-19 17:00 | −0.61 % | exit_signal |
+
+#### Qué pasó
+
+Cuatro operaciones, tres perdedoras. Las tres pérdidas fueron por stop o por
+cruce bajista, todas entre −0.6 % y −1.9 %: ninguna se salió de la banda
+esperada. La ganadora de BTC salió por trailing tras subir 2.7 %.
+
+#### Qué me sorprendió
+
+La entrada de ETH del día 17 llegó con el RSI en 68, casi en el límite de 70.
+Entró y el precio se dio la vuelta en tres velas. Me pregunto si la banda
+debería ser más estrecha por arriba — **pero no lo toco**, va a la lista.
+
+Y algo que no esperaba: SOL generó la mitad de las señales él solo. Los tres
+pares no contribuyen por igual.
+
+#### Qué cambiaría
+
+1. Probar RSI máximo en 65 en vez de 70.
+2. Mirar si SOL merece un tratamiento distinto por su volatilidad.
+
+Las dos van a la lista. **Ninguna se ejecuta durante el dry-run.**
+
+#### Cómo va contra el backtest
+
+| Métrica | Backtest | Dry-run | Desviación |
+|---|---:|---:|---:|
+| Expectativa por operación | −0.33 % | −0.36 % | −9.1 % |
+| Win rate | 53.2 % | 44.4 % | −16.5 % ⚠ |
+| Profit factor | 0.60 | 0.52 | −13.3 % |
+
+El win rate se sale del 15 %, pero con 9 operaciones acumuladas eso es ruido:
+una operación más o menos lo mueve 11 puntos. No se decide nada hasta pasar de
+30.
+
+#### Decisiones tomadas
+
+Ninguna. Semana 3 de 4 del dry-run.
+
+</details>
+
 # Entradas
 
 <!-- Las entradas nuevas van arriba, la más reciente primero. -->
 
-## Semana del 2026-08-20 — construcción (T1–T10)
+## Semana del 2026-08-20 — construcción (T1–T10) y arranque del dry-run
 
-**Fase:** desarrollo
-**Estado del bot:** todavía no ha corrido en dry-run
+**Fase:** desarrollo → dry-run
+**Estado del bot:** en marcha desde el 2026-08-20 21:40 UTC, en Docker
+
+### Números
+
+| | |
+|---|---|
+| Operaciones cerradas | 0 |
+| P&L acumulado | 0.00 USDT |
+| Equity | 1.000,00 USDT (**simulados**) |
+| Posiciones abiertas | 0 |
+
+**Estado de la conexión, para que quede por escrito:**
+
+| | |
+|---|---|
+| `dry_run` | `true` — ninguna orden llega al mercado |
+| Claves de API de Binance | **ninguna configurada** (`.env` vacío) |
+| Qué sí hace contra Binance | descargar precios en vivo por la API pública |
+| Qué no puede hacer | consultar un saldo real o enviar una orden |
+| Dinero en riesgo | **cero**, y no por disciplina sino porque no hay cuenta conectada |
+
+El reloj de las 4 semanas de validación empieza hoy.
 
 ### Qué pasó
 

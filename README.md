@@ -191,6 +191,18 @@ python tools/watchdog.py --intervalo 300
 El vigilante corre **al lado** del bot, no dentro. Es deliberado: la mitad de
 lo que hay que vigilar son cosas que ocurren cuando el bot deja de funcionar.
 
+### Rutina semanal del dry-run
+
+```bash
+python tools/entrada_journal.py --anadir    # rellena las tablas con datos reales
+```
+
+Genera la entrada de `docs/JOURNAL.md` leyendo la base de datos del bot y deja
+en blanco las tres preguntas que tienes que contestar tú — que son las que
+valen. Las cifras nunca se escriben a mano: una bitácora con números inventados
+o mal copiados es peor que no tener bitácora, porque dentro de un mes decidirías
+comparando contra algo que no ocurrió.
+
 FreqUI queda en <http://localhost:8080>.
 
 ---
@@ -271,7 +283,9 @@ Si nada responde: cierra las posiciones a mano en Binance. Ver
 │   ├── report.py               # tabla comparable backtest / dry-run / live
 │   ├── api_freqtrade.py        # cliente REST del bot
 │   ├── kill_switch.py          # cierra todo y detiene
-│   └── watchdog.py             # heartbeat, límites, resumen diario
+│   ├── watchdog.py             # heartbeat, límites, resumen diario
+│   ├── setup_telegram.py       # asistente de configuración de Telegram
+│   └── entrada_journal.py      # entrada semanal del journal con datos reales
 ├── tests/                      # 92 tests
 └── docs/
     ├── STRATEGY.md             # las reglas en español, sin código
