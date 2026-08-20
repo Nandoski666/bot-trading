@@ -64,7 +64,11 @@ services:
       # El vigilante habla con el bot por la red interna de Compose, no por
       # localhost: cada contenedor tiene el suyo.
       - FREQTRADE_API_URL=http://freqtrade:8080
-    entrypoint: ["python"]
+      # Sin esto Python bufferiza stdout al no haber TTY, y `docker compose logs
+      # watchdog` sale vacio durante horas. Un vigilante cuyos logs no se ven no
+      # se puede auditar — y auditarlo es justo lo que se hace cuando algo va mal.
+      - PYTHONUNBUFFERED=1
+    entrypoint: ["python", "-u"]
     command:
       - "/freqtrade/tools/watchdog.py"
       - "--url"

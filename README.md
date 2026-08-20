@@ -55,17 +55,32 @@ cp .env.example .env
 
 Rellena `.env` con:
 
-- Claves de **testnet** de Binance (`https://testnet.binance.vision`) para todo
-  el desarrollo. Las claves reales solo entran en la fase live.
-- Token y chat ID de Telegram (crear bot con `@BotFather`).
 - Contraseña y `JWT_SECRET_KEY` para FreqUI:
   ```bash
   python -c "import secrets; print(secrets.token_hex(32))"
   ```
+- Claves de **testnet** de Binance (`https://testnet.binance.vision`) para todo
+  el desarrollo. Las claves reales solo entran en la fase live. **El dry-run no
+  las necesita**: los datos de precios son públicos.
 
 `.env` está en `.gitignore`. Nunca se sube. Nunca se pega en un chat.
 
-### 2. Verificar el entorno
+### 2. Telegram
+
+Crea el bot con `@BotFather` (`/newbot`), pega el token en `TELEGRAM_TOKEN`
+dentro de `.env`, y deja que el asistente haga el resto:
+
+```bash
+python tools/setup_telegram.py
+```
+
+Averigua el chat ID solo, manda un mensaje de prueba y activa Telegram.
+Para comprobar sin cambiar nada: `python tools/setup_telegram.py --probar`.
+
+Hasta que lo configures, `FREQTRADE__TELEGRAM__ENABLED=false` en `.env` permite
+que el bot arranque sin notificaciones.
+
+### 3. Verificar el entorno
 
 **Con Docker:**
 
