@@ -1,0 +1,329 @@
+# Runbook — qué hacer cuando algo falla
+
+Documento de emergencia. Está escrito para leerlo con prisa y sin contexto:
+cada sección empieza por el síntoma, no por la causa.
+
+**Regla general:** ante la duda, **parar**. Un bot detenido no pierde dinero.
+Un bot funcionando mal, sí.
+
+---
+
+## Comandos de emergencia
+
+```bash
+python tools/kill_switch.py --confirm
+```
+
+Cierra todas las posiciones a mercado y detiene el bot.
+
+```bash
+python tools/kill_switch.py --solo-detener
+```
+
+Deja de abrir posiciones nuevas. Las abiertas siguen vivas con su stop activo.
+Es la opción correcta cuando quieres parar pero no quieres realizar pérdidas
+en ese momento.
+
+**Desde Telegram** (funciona aunque no tengas acceso al servidor):
+
+| Comando | Qué hace |
+|---|---|
+| `/stop` | Deja de abrir posiciones |
+| `/forceexit all` | Cierra todas las posiciones a mercado |
+| `/status` | Posiciones abiertas y su P&L |
+| `/profit` | Resumen de resultados |
+| `/start` | Reanuda la apertura de posiciones |
+
+**Si nada de esto responde:** entra a Binance por la web y cierra las
+posiciones a mano. Es siempre la opción disponible. No esperes a que el bot
+vuelva.
+
+---
+
+## Diagnóstico rápido
+
+```bash
+docker compose ps                      # ¿el contenedor está vivo?
+docker compose logs --tail 100         # ¿qué fue lo último que hizo?
+python tools/watchdog.py --once        # heartbeat, límites, estado
+```
+
+FreqUI: <http://localhost:8080>
+
+---
+
+## Síntoma: el exchange rechaza las órdenes
+
+**En los logs:** `InsufficientFunds`, `Order would trigger immediately`,
+`MIN_NOTIONAL`, `Invalid API-key, IP, or permissions`.
+
+### Causas por orden de probabilidad
+
+**1. La orden no llega al mínimo del exchange.** Binance exige un notional
+mínimo (unos 5–10 USDT según el par). Con capital pequeño y un stop ancho, el
+tamaño calculado puede quedar por debajo.
+
+*Es comportamiento correcto:* la estrategia prefiere no entrar antes que
+arriesgar más del 0.5%. Si pasa a menudo, el capital es demasiado pequeño para
+estas reglas de riesgo. La respuesta **no** es subir el riesgo por operación.
+
+**2. Saldo insuficiente.** Hay USDT bloqueado en órdenes abiertas, o el saldo
+real es menor que el que cree el bot.
+
+```bash
+docker compose restart      # el bot reconcilia el saldo al arrancar
+```
+
+**3. La API key perdió permisos o cambió tu IP.**
+
+- ¿La whitelist de IP sigue coincidiendo con la IP del VPS? Los proveedores la
+  cambian tras algunas migraciones.
+- Binance caduca las API keys tras 90 días sin uso.
+- Verifica que sigue teniendo **solo trading spot** y **retiros deshabilitados**.
+
+**4. El par se suspendió.** Binance detiene pares por mantenimiento. Míralo en
+su página de estado. Si es prolongado, sácalo del `pair_whitelist`.
+
+### Qué hacer
+
+1. Lee el mensaje de error completo en los logs. Es específico.
+2. Si es de permisos o IP: `--solo-detener`, arregla la key, reinicia.
+3. Si es de mínimos: no es un error. Anótalo en el journal.
+4. **Nunca** subas el riesgo por operación para que las órdenes pasen el mínimo.
+
+---
+
+## Síntoma: se cayó la conexión
+
+Freqtrade reconecta solo. Reintenta con espera creciente y no duplica órdenes.
+
+### Cuándo preocuparse
+
+- **Menos de 5 minutos:** normal. No hagas nada.
+- **Más de 10 minutos:** el watchdog te avisa por Telegram. Comprueba si es tu
+  red o Binance (status.binance.com).
+- **Con posiciones abiertas y caída larga:** el riesgo real es que el precio
+  toque el stop y el bot no esté para ejecutarlo.
+
+### La protección que hay que tener puesta
+
+En `config.live.json` está activado `stoploss_on_exchange`: el stop se coloca
+**en Binance**. Si el bot desaparece, la protección sigue puesta.
+
+En dry-run está desactivado porque no hay órdenes reales que colocar.
+
+> Si operas en vivo con `stoploss_on_exchange: false`, una caída del bot deja las
+> posiciones completamente desprotegidas. No lo hagas.
+
+---
+
+## Síntoma: el bot está muerto y hay una posición abierta
+
+El caso peor. Actúa en este orden.
+
+### 1. ¿Hay stop puesto en el exchange?
+
+Entra a Binance → Órdenes → Órdenes abiertas. Si ves una orden stop-limit del
+par en cuestión, la posición está protegida. Tienes tiempo.
+
+### 2. Si no hay stop, decide ahora
+
+Calcula el stop que debería tener: `precio_de_entrada − 2 × ATR`. El precio de
+entrada está en Binance (historial de operaciones) y en la base de datos:
+
+```bash
+sqlite3 user_data/tradesv3.dryrun.sqlite \
+  "SELECT id, pair, open_date, open_rate, amount, is_open FROM trades WHERE is_open = 1;"
+```
+
+Dos opciones, las dos válidas:
+
+- **Colocar el stop a mano en Binance** y luego arreglar el bot con calma.
+- **Cerrar la posición a mercado** y arrancar limpio. Más simple, y en una
+  emergencia lo simple gana.
+
+### 3. Recuperar el bot
+
+```bash
+docker compose logs --tail 200 > /tmp/crash.log   # ANTES de reiniciar
+docker compose up -d
+```
+
+Guarda los logs primero. Si reinicias sin ellos, pierdes la única evidencia de
+por qué se cayó y volverá a pasar.
+
+Freqtrade recupera las posiciones abiertas desde la base de datos al arrancar y
+sigue gestionándolas.
+
+### 4. Si la base de datos se corrompió
+
+```bash
+sqlite3 user_data/tradesv3.dryrun.sqlite "PRAGMA integrity_check;"
+```
+
+Si falla: cierra todo a mano en Binance, mueve el archivo a un lado, y arranca
+de cero. **No intentes reparar la base de datos con posiciones abiertas.**
+
+---
+
+## Síntoma: hay que reiniciar el VPS
+
+### Reinicio planificado
+
+```bash
+python tools/kill_switch.py --solo-detener   # deja de abrir posiciones
+# espera a que se cierren las abiertas, o ciérralas a mano
+python tools/kill_switch.py --confirm
+docker compose down
+sudo reboot
+```
+
+Al volver:
+
+```bash
+cd ~/trading-bot
+docker compose up -d
+docker compose logs -f          # confirma que arranca limpio
+python tools/watchdog.py --once
+```
+
+### Reinicio inesperado
+
+Con `restart: unless-stopped` en el compose, Docker levanta el bot solo cuando
+el demonio arranca. Verifica que Docker tiene arranque automático:
+
+```bash
+sudo systemctl enable docker
+```
+
+Tras el arranque, **confirma siempre** que el bot recuperó su estado:
+
+```bash
+docker compose logs | grep -i "open trades\|Reloading"
+```
+
+---
+
+## Síntoma: hay que rotar las API keys
+
+Hazlo si sospechas una filtración, cada 90 días, o al cambiar de VPS.
+
+**Con una filtración, el orden importa: revocar primero, preguntar después.**
+
+### 1. Parar
+
+```bash
+python tools/kill_switch.py --confirm
+docker compose down
+```
+
+### 2. Revocar la vieja en Binance
+
+Perfil → Gestión de API → eliminar la clave. Confirma que ya no aparece.
+
+### 3. Crear la nueva
+
+- Permisos: **solo** «Enable Spot & Margin Trading»
+- **Retiros: DESHABILITADOS**
+- Restricción de IP: la IP fija del VPS
+
+### 4. Actualizar `.env` y arrancar
+
+```bash
+nano .env          # BINANCE_API_KEY, BINANCE_API_SECRET
+docker compose up -d
+docker compose logs -f
+```
+
+### 5. Verificar
+
+```bash
+docker compose logs | grep -i "balance\|authenticat"
+```
+
+> Si la clave estuvo expuesta en un repositorio, un chat o una captura:
+> **revócala igualmente**, aunque parezca que no pasó nada. Los bots que
+> rastrean claves filtradas tardan minutos, no días.
+
+---
+
+## Síntoma: el dry-run no se parece al backtest
+
+El criterio del plan es una desviación menor al 15%. Por encima, hay una causa
+concreta y hay que encontrarla.
+
+```bash
+python tools/report.py \
+  --backtest user_data/backtest_results/<archivo>.zip \
+  --dry-run user_data/tradesv3.dryrun.sqlite
+```
+
+### Causas por orden de probabilidad
+
+**1. Slippage real mayor que el simulado.** El backtest asume 0.05%. En
+mercados agitados una orden a mercado puede llenarse mucho peor. Compara el
+precio de entrada real con el cierre de la vela de la señal.
+
+**2. Órdenes que no se llenaron.** El backtest asume que toda señal se ejecuta.
+En vivo, `unfilledtimeout` cancela las que no llenan en 10 minutos.
+
+**3. Menos operaciones que en el backtest.** Suele ser bueno: las protecciones
+(`CooldownPeriod`, `StoplossGuard`) están bloqueando entradas que el backtest sí
+tomó.
+
+**4. Sesgo de anticipación que el análisis no detectó.** El caso más grave.
+Señal: el dry-run es sistemáticamente peor, no puntualmente.
+
+```bash
+make lookahead
+.venv/bin/freqtrade recursive-analysis --config user_data/config.dryrun.json \
+    --strategy BaselineTrend --datadir user_data/data -p BTC/USDT
+```
+
+> Una desviación grande **no se arregla ajustando parámetros**. Se diagnostica.
+> Ajustar sin entender la causa reinicia el reloj de validación y no arregla nada.
+
+---
+
+## Síntoma: saltó un límite de riesgo
+
+### Pérdida diaria (3%)
+
+El bot deja de abrir posiciones. Las abiertas siguen con su stop.
+
+**No se reactiva solo, y es a propósito.** Antes de `/start`:
+
+1. Mira las operaciones del día: ¿pérdidas normales o algo se rompió?
+2. ¿Fue el mercado o fue el sistema? Un día de −3% en un desplome general es
+   distinto de un −3% con el mercado plano.
+3. Anótalo en `docs/JOURNAL.md`.
+
+### Drawdown total (10%) — kill switch
+
+Todo cerrado, bot apagado. **El watchdog queda enclavado**: no se rearma solo.
+
+Para volver a operar:
+
+1. Diagnostica. Un 10% desde el máximo significa que el sistema dejó de
+   funcionar, o que el régimen de mercado cambió, o que hay un bug.
+2. Escribe la conclusión en el journal.
+3. Borra el estado del watchdog:
+   ```bash
+   rm user_data/watchdog_estado.json
+   ```
+4. Arranca el bot.
+
+> El paso 1 no es opcional. Reiniciar sin diagnóstico repite exactamente la
+> misma pérdida, y la segunda vez duele más porque ya sabías.
+
+---
+
+## Antes de cualquier cambio en producción
+
+1. ¿Están los tests en verde? `make test`
+2. ¿Sigue sin sesgo de anticipación? `make lookahead`
+3. ¿Está anotado en `docs/JOURNAL.md` qué cambias y por qué?
+4. ¿Es **un solo** cambio?
+5. ¿Aceptas que el reloj de validación vuelve a cero?
+
+Si alguna respuesta es no, no es el momento de tocar producción.

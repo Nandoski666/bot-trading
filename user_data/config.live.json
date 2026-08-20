@@ -1,9 +1,13 @@
 {
+    "//_AVISO_1": "CONFIGURACION DE DINERO REAL. No usar hasta cumplir TODOS los criterios go/no-go de la seccion 4 del plan.",
+    "//_AVISO_2": "Requisitos de la API key: solo trading spot, RETIROS DESHABILITADOS, IP en whitelist.",
+    "//_AVISO_3": "initial_state=stopped a proposito: el bot arranca detenido. Se activa con /start desde Telegram, despues de verificar saldo y estado.",
+    "//_AVISO_4": "stoploss_on_exchange=true: el stop queda colocado en Binance. Si el bot muere, la posicion sigue protegida.",
+    "//_AVISO_5": "Empezar con el capital minimo que permita el exchange. El techo es lo que puedas perder al 100 %.",
     "$schema": "https://schema.freqtrade.io/schema.json",
     "//": "DRY-RUN: opera en papel con precios reales del mercado.",
     "//_riesgo": "max_open_trades y stoploss estan tambien hard-coded en la estrategia.",
-    "dry_run": true,
-    "dry_run_wallet": 1000,
+    "dry_run": false,
     "max_open_trades": 3,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
@@ -46,7 +50,8 @@
         "force_entry": "market",
         "force_exit": "market",
         "stoploss": "market",
-        "stoploss_on_exchange": false
+        "stoploss_on_exchange": true,
+        "stoploss_on_exchange_interval": 60
     },
     "exchange": {
         "name": "binance",
@@ -107,14 +112,14 @@
         "username": "",
         "password": ""
     },
-    "bot_name": "baseline-trend-dryrun",
-    "initial_state": "running",
+    "bot_name": "baseline-trend-live",
+    "initial_state": "stopped",
     "force_entry_enable": false,
     "internals": {
         "process_throttle_secs": 5,
         "heartbeat_interval": 60
     },
     "dataformat_ohlcv": "feather",
-    "db_url": "sqlite:////freqtrade/user_data/tradesv3.dryrun.sqlite",
+    "db_url": "sqlite:////freqtrade/user_data/tradesv3.live.sqlite",
     "logfile": "user_data/logs/freqtrade.log"
 }

@@ -16,15 +16,21 @@ prolongado y criterios go/no-go que no se negocian.
 | Ticket | Descripción | Estado |
 |---|---|---|
 | T1 | Bootstrap del proyecto | ✅ |
-| T2 | Descarga y validación de datos | ⬜ |
-| T3 | Estrategia `BaselineTrend` | ⬜ |
-| T4 | Tests unitarios | ⬜ |
-| T5 | Backtest reproducible | ⬜ |
-| T6 | Walk-forward analysis | ⬜ |
-| T7 | Reporte de métricas | ⬜ |
-| T8 | Configuración dry-run | ⬜ |
-| T9 | Kill switch y límites | ⬜ |
-| T10 | Documentación operativa | ⬜ |
+| T2 | Descarga y validación de datos | ✅ 50.832 velas/par, 0.039 % faltantes |
+| T3 | Estrategia `BaselineTrend` | ✅ `lookahead-analysis`: sin sesgo |
+| T4 | Tests unitarios | ✅ 75 tests, 95 % de cobertura |
+| T5 | Backtest reproducible | ✅ 237 ops in-sample, con costos |
+| T6 | Walk-forward analysis | ✅ 18 ventanas |
+| T7 | Reporte de métricas | ✅ |
+| T8 | Configuración dry-run | ✅ configs listas · falta correr 24 h |
+| T9 | Kill switch y límites | ✅ |
+| T10 | Documentación operativa | ✅ |
+
+**El bot NO está listo para dinero real, y no por falta de tickets.** La
+estrategia baseline no pasa los criterios go/no-go: pierde dinero en el
+backtest in-sample. Eso era lo esperado — el proyecto es la máquina de probar
+ideas, y esta es la primera idea. Ver
+[el reporte de métricas](#resultados-medidos).
 
 ---
 
@@ -76,6 +82,29 @@ make version
 
 ---
 
+## Resultados medidos
+
+Backtest in-sample (2021-01-01 → 2024-06-30), **con 0.15 % de coste por lado**:
+
+| Métrica | BaselineTrend | Buy & hold BTC | Criterio go/no-go |
+|---|---:|---:|---|
+| Operaciones | 237 | — | ≥ 100 ✅ |
+| Profit factor | 0.60 | — | > 1.2 ❌ |
+| Beneficio total | −16.74 % | +87.14 % | — |
+| Max drawdown | 17.45 % | 76.63 % | < 20 % ✅ |
+| Sharpe | −1.79 | 0.61 | > 1.0 ❌ |
+| Calmar | −0.30 | 0.26 | ganar a B&H ❌ |
+
+**Veredicto: no pasa a live.** Los criterios no se ajustan para que pase.
+
+Regenerar estos números:
+
+```bash
+python tools/report.py --backtest user_data/backtest_results/<archivo>.zip
+```
+
+---
+
 ## Flujo completo
 
 El orden importa: cada fase es un filtro que la anterior tiene que pasar.
@@ -99,8 +128,10 @@ make lookahead
 # T5 — Backtest in-sample con comisiones y slippage
 make backtest
 
-# T6 — Walk-forward (mide sobreajuste)
-python tools/walk_forward.py
+# T6 — Walk-forward (mide sobreajuste). Tarda ~40 min.
+python tools/walk_forward.py --solo-listar     # ver las ventanas primero
+python tools/walk_forward.py --epochs 40
+python tools/walk_forward.py --solo-reporte    # regenerar el reporte sin re-optimizar
 
 # T7 — Reporte comparable
 python tools/report.py --backtest user_data/backtest_results/<archivo>.json
@@ -108,7 +139,13 @@ python tools/report.py --backtest user_data/backtest_results/<archivo>.json
 # T8 — Dry-run (papel, precios reales)
 docker compose up -d
 docker compose logs -f
+
+# T9 — Vigilante: heartbeat, límite diario, drawdown, resumen a Telegram
+python tools/watchdog.py --intervalo 300
 ```
+
+El vigilante corre **al lado** del bot, no dentro. Es deliberado: la mitad de
+lo que hay que vigilar son cosas que ocurren cuando el bot deja de funcionar.
 
 FreqUI queda en <http://localhost:8080>.
 
@@ -162,3 +199,50 @@ python tools/kill_switch.py --confirm
 
 Cierra todas las posiciones a mercado y detiene el bot. Desde Telegram:
 `/stop` detiene la apertura de nuevas posiciones, `/forceexit all` cierra todo.
+
+Si nada responde: cierra las posiciones a mano en Binance. Ver
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+---
+
+## Estructura
+
+```
+.
+├── docker-compose.yml          # imagen oficial de Freqtrade
+├── Makefile                    # atajos: setup, test, lookahead, backtest, data
+├── user_data/
+│   ├── config.dryrun.json      # papel, precios reales
+│   ├── config.live.json        # dinero real — arranca detenido a propósito
+│   ├── strategies/
+│   │   ├── reglas_riesgo.py    # los límites. No optimizables. Verificados por tests.
+│   │   ├── BaselineTrend.py    # la estrategia. Parámetros fijos.
+│   │   └── BaselineTrendOpt.py # variante optimizable, SOLO para el walk-forward
+│   └── data/                   # OHLCV + DATA_REPORT.md (no versionado)
+├── tools/
+│   ├── download_data.sh        # descarga OHLCV (dos pasadas: prepend + append)
+│   ├── validate_data.py        # auditoría de calidad → DATA_REPORT.md
+│   ├── run_backtest.py         # backtest reproducible + manifiesto
+│   ├── walk_forward.py         # ventanas rodantes, mide sobreajuste
+│   ├── report.py               # tabla comparable backtest / dry-run / live
+│   ├── api_freqtrade.py        # cliente REST del bot
+│   ├── kill_switch.py          # cierra todo y detiene
+│   └── watchdog.py             # heartbeat, límites, resumen diario
+├── tests/                      # 75 tests
+└── docs/
+    ├── STRATEGY.md             # las reglas en español, sin código
+    ├── RUNBOOK.md              # qué hacer cuando algo falla
+    └── JOURNAL.md              # bitácora semanal (la llenas tú)
+```
+
+### Por qué la estrategia está partida en dos archivos
+
+`BaselineTrend` no expone ningún parámetro de hyperopt, y eso es deliberado: es
+la línea base contra la que se mide todo lo demás, y una referencia que se
+optimiza deja de ser una referencia. Hay un test que falla si alguien le añade
+parámetros optimizables.
+
+`BaselineTrendOpt` hereda de ella y abre los parámetros de señal. Existe solo
+para que el walk-forward tenga algo que optimizar y pueda medir cuánto
+rendimiento se pierde fuera de muestra. Las reglas de riesgo se heredan sin
+tocar en ambos casos.

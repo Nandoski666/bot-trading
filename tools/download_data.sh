@@ -18,7 +18,11 @@ cd "$(dirname "$0")/.."
 
 PARES=("BTC/USDT" "ETH/USDT" "SOL/USDT")
 TIMEFRAMES=("1h" "1d")   # 1d se usa para el benchmark buy-and-hold y validacion cruzada
-DESDE="20210101"
+# Empieza 2 meses antes del inicio del backtest (2021-01-01) a proposito:
+# la estrategia necesita 600 velas de calentamiento para que la EMA(200)
+# converja. Sin ese margen, las primeras semanas del backtest operarian con
+# un filtro de regimen a medio calcular, o Freqtrade recortaria la ventana.
+DESDE="20201101"
 FORMATO="feather"
 
 # --- Elegir runner: docker o venv local ---------------------------------------
@@ -43,14 +47,33 @@ echo "    desde      : ${DESDE}"
 echo "    destino    : ${DATADIR}"
 echo
 
-"${RUNNER[@]}" download-data \
-    --config "${CONFIG}" \
-    --exchange binance \
-    --pairs "${PARES[@]}" \
-    --timeframes "${TIMEFRAMES[@]}" \
-    --timerange "${DESDE}-" \
-    --data-format-ohlcv "${FORMATO}" \
-    --datadir "${DATADIR}"
+descargar() {
+    "${RUNNER[@]}" download-data \
+        --config "${CONFIG}" \
+        --exchange binance \
+        --pairs "${PARES[@]}" \
+        --timeframes "${TIMEFRAMES[@]}" \
+        --timerange "${DESDE}-" \
+        --data-format-ohlcv "${FORMATO}" \
+        --datadir "${DATADIR}" \
+        "$@"
+}
+
+# Dos pasadas, porque Freqtrade no hace las dos cosas a la vez:
+#
+#   --prepend  rellena hacia ATRAS hasta ${DESDE}. Solo hace falta la primera
+#              vez, o cuando se adelanta la fecha de inicio. Sin esto, un
+#              dataset ya existente que empiece mas tarde se queda como esta y
+#              el backtest arranca con menos calentamiento del que cree tener.
+#   (normal)   anade hacia ADELANTE las velas nuevas desde la ultima descarga.
+#
+# Las dos son idempotentes: repetirlas no vuelve a bajar lo que ya esta.
+echo "--> pasada 1/2: rellenando hacia atras (--prepend)"
+descargar --prepend
+
+echo
+echo "--> pasada 2/2: anadiendo velas nuevas"
+descargar
 
 echo
 echo "==> Resumen de lo descargado"

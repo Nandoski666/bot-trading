@@ -14,6 +14,9 @@ user_data/hyperopt_results/
 user_data/logs/
 user_data/plot/
 user_data/models/
+user_data/freqaimodels/
+user_data/hyperopt.lock
+user_data/watchdog_estado.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

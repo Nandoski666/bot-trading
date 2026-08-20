@@ -63,7 +63,17 @@ y `tests/test_lookahead.py`.
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Freqtrade carga las estrategias por ruta, no como paquete. En el proceso
+# principal eso basta, pero el hyperopt reparte el trabajo entre procesos hijo
+# que vuelven a importar este archivo desde cero — y alli `from reglas_riesgo
+# import ...` fallaria porque el directorio no esta en sys.path.
+_DIR = str(Path(__file__).resolve().parent)
+if _DIR not in sys.path:
+    sys.path.insert(0, _DIR)
 
 import pandas as pd
 import talib.abstract as ta
