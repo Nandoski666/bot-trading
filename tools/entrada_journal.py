@@ -25,6 +25,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -179,6 +180,26 @@ def construir(desde: datetime, hasta: datetime, db: Path,
     return "\n".join(L)
 
 
+def insertar_en_orden(texto: str, entrada: str, fecha: datetime) -> str:
+    """Coloca la entrada donde le toca por fecha, no siempre arriba del todo.
+
+    La bitacora va de mas reciente a mas antigua. Insertar siempre al principio
+    funciona mientras cada entrada nueva sea la mas reciente — pero en cuanto se
+    genera una semana atrasada (o la primera, que puede cubrir dias anteriores al
+    arranque del bot), el orden se rompe en silencio y la bitacora deja de
+    leerse cronologicamente.
+    """
+    cabeceras = list(re.finditer(r"^## Semana del (\d{4}-\d{2}-\d{2})",
+                                 texto, re.MULTILINE))
+    for m in cabeceras:
+        if m.group(1) < f"{fecha:%Y-%m-%d}":
+            # Primera entrada mas antigua: la nueva va justo antes.
+            return texto[:m.start()] + entrada + texto[m.start():]
+
+    # Mas antigua que todas, o no hay ninguna: detras de la marca.
+    return texto.replace(MARCA_ENTRADAS, MARCA_ENTRADAS + "\n\n" + entrada, 1)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Genera la entrada semanal del journal")
     p.add_argument("--desde", default=None, help="AAAA-MM-DD (por defecto, hace 7 dias)")
@@ -197,6 +218,15 @@ def main() -> int:
     desde = (datetime.fromisoformat(args.desde).replace(tzinfo=timezone.utc)
              if args.desde else hasta - timedelta(days=7))
 
+    # Copia fresca desde el volumen de Docker antes de componer nada: una
+    # bitacora con numeros viejos es peor que una sin numeros.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from exportar_db import exportar
+        exportar(args.db, silencioso=True)
+    except ImportError:
+        pass
+
     entrada = construir(desde, hasta, args.db, args.capital, args.fase)
 
     if not args.anadir:
@@ -212,7 +242,13 @@ def main() -> int:
         print(entrada)
         return 1
 
-    texto = texto.replace(MARCA_ENTRADAS, MARCA_ENTRADAS + "\n\n" + entrada, 1)
+    if f"## Semana del {desde:%Y-%m-%d}" in texto:
+        print(f"Ya existe una entrada para la semana del {desde:%Y-%m-%d}.\n"
+              "No se duplica. Si quieres regenerarla, borra la anterior a mano.",
+              file=sys.stderr)
+        return 2
+
+    texto = insertar_en_orden(texto, entrada, desde)
     JOURNAL.write_text(texto, encoding="utf-8")
     print(f"Entrada de la semana del {desde:%Y-%m-%d} anadida a {JOURNAL.relative_to(RAIZ)}")
     print("Ahora rellena a mano las tres secciones en blanco. Son las que valen.")

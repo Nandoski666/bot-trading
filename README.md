@@ -216,6 +216,12 @@ comparando contra algo que no ocurrió.
 
 FreqUI queda en <http://localhost:8080>.
 
+> **Si lo corres en un portátil:** macOS se suspende aunque esté enchufado, y
+> con él la máquina virtual de Docker. El bot deja de procesar velas durante
+> esos minutos. Para el dry-run, `caffeinate -dimsu &` evita la suspensión por
+> inactividad (no la de cerrar la tapa). Para dinero real, un VPS — cada
+> suspensión es una ventana en la que nadie gestiona una posición abierta.
+
 ---
 
 ## Reglas de riesgo (no configurables)
@@ -296,6 +302,7 @@ Si nada responde: cierra las posiciones a mano en Binance. Ver
 │   ├── kill_switch.py          # cierra todo y detiene
 │   ├── watchdog.py             # heartbeat, límites, resumen diario
 │   ├── estado.py               # qué está viendo el bot ahora mismo
+│   ├── exportar_db.py          # saca el SQLite del volumen Docker al host
 │   ├── setup_telegram.py       # asistente de configuración de Telegram
 │   └── entrada_journal.py      # entrada semanal del journal con datos reales
 ├── tests/                      # 92 tests

@@ -9,14 +9,52 @@
 # Las credenciales NUNCA van en este archivo: se leen de .env (que está en .gitignore).
 
 services:
+  # ---------------------------------------------------------------------------
+  # Inicializacion del volumen de la base de datos.
+  #
+  # Docker crea los volumenes nombrados con dueño root cuando la ruta de montaje
+  # no existe en la imagen. Freqtrade corre como ftuser (uid 1000), asi que sin
+  # este paso el bot arranca y muere con
+  # "sqlite3.OperationalError: unable to open database file".
+  #
+  # Corre una vez, ajusta el dueño y termina. Los demas servicios esperan a que
+  # acabe con `service_completed_successfully`.
+  # ---------------------------------------------------------------------------
+  db-init:
+    image: freqtradeorg/freqtrade:stable
+    container_name: freqtrade-db-init
+    user: root
+    volumes:
+      - "db:/freqtrade/db"
+    entrypoint: ["sh", "-c", "mkdir -p /freqtrade/db && chown -R 1000:1000 /freqtrade/db"]
+    restart: "no"
+
   freqtrade:
     image: freqtradeorg/freqtrade:stable
     container_name: freqtrade
     restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
     # Persistencia: todo el estado vive en user_data/ del host, así sobrevive
     # a reinicios, recreaciones del contenedor y actualizaciones de imagen.
     volumes:
       - "./user_data:/freqtrade/user_data"
+      # La base de datos NO va en el bind mount de macOS.
+      #
+      # Docker Desktop expone ./user_data a traves de un sistema de archivos
+      # virtualizado. SQLite mantiene el archivo abierto durante toda la vida
+      # del proceso y depende de bloqueos POSIX; cuando el Mac se suspende, esos
+      # descriptores quedan invalidos y el bot empieza a dar
+      # "sqlite3.OperationalError: disk I/O error" en cada consulta, hasta
+      # reiniciar. El archivo no se corrompe — integrity_check sigue diciendo ok
+      # — pero el proceso ya no puede escribir. Con una posicion abierta, eso es
+      # un bot que no puede registrar lo que hace.
+      #
+      # Un volumen nombrado vive en el ext4 de la maquina virtual de Docker,
+      # donde los bloqueos funcionan como es debido y sobreviven a la suspension.
+      # Para leerlo desde el host: python tools/exportar_db.py
+      - "db:/freqtrade/db"
     ports:
       # FreqUI + API REST. Se expone solo en loopback: nunca abrir a internet
       # sin un reverse proxy con TLS y autenticación.
@@ -46,7 +84,7 @@ services:
     command: >
       trade
       --logfile /freqtrade/user_data/logs/freqtrade.log
-      --db-url sqlite:////freqtrade/user_data/tradesv3.dryrun.sqlite
+      --db-url sqlite:////freqtrade/db/tradesv3.dryrun.sqlite
       --config /freqtrade/user_data/config.dryrun.json
       --strategy BaselineTrend
 
@@ -69,6 +107,7 @@ services:
     volumes:
       - "./user_data:/freqtrade/user_data"
       - "./tools:/freqtrade/tools:ro"
+      - "db:/freqtrade/db"
       - "./.env:/freqtrade/.env:ro"
     env_file:
       - .env
@@ -87,3 +126,16 @@ services:
       - "http://freqtrade:8080"
       - "--intervalo"
       - "300"
+
+# ---------------------------------------------------------------------------
+# Volumenes nombrados
+# ---------------------------------------------------------------------------
+volumes:
+  # Estado del bot (SQLite). Fuera del bind mount a proposito — ver el
+  # comentario en el servicio freqtrade.
+  #
+  # Sobrevive a `docker compose down` y a las actualizaciones de imagen. Para
+  # borrarlo de verdad hace falta `docker compose down -v`, que es justo la
+  # friccion que se quiere: perder este volumen es perder el historial de
+  # operaciones del dry-run.
+  db:

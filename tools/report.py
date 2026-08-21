@@ -26,12 +26,15 @@ import argparse
 import json
 import math
 import sqlite3
+import sys
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 RAIZ = Path(__file__).resolve().parents[1]
 
@@ -476,6 +479,15 @@ def main() -> int:
             return 1
         fases.append(leer_backtest(args.backtest))
     if args.dryrun:
+        # El SQLite vive en un volumen de Docker, no en el bind mount. Se saca
+        # una copia fresca antes de leer: sin esto se reportarian los numeros de
+        # la ultima vez que alguien lo exporto, sin ninguna senal de que estan
+        # viejos.
+        try:
+            from exportar_db import exportar
+            exportar(args.dryrun, silencioso=True)
+        except ImportError:
+            pass
         if args.dryrun.exists():
             fases.append(leer_sqlite(args.dryrun, "Dry-run", args.capital))
         else:

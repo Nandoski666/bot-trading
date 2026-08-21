@@ -205,51 +205,6 @@ Ninguna. Semana 3 de 4 del dry-run.
 
 <!-- Las entradas nuevas van arriba, la más reciente primero. -->
 
-## Semana del 2026-08-14
-
-**Fase:** dry-run
-**Estado del bot:** _(¿corrió sin interrupciones? ¿cuántos reinicios?)_
-
-### Números
-
-| | |
-|---|---|
-| Operaciones cerradas | 0 |
-| Ganadoras / perdedoras | 0 / 0 |
-| P&L de la semana | +0.00 USDT (+0.00%) |
-| P&L acumulado | +0.00 USDT (+0.00%) |
-| Drawdown máximo esta semana | 0.00 % |
-| Equity actual | 1,000.00 USDT |
-| Posiciones abiertas al cierre | 0 |
-| Operaciones desde el inicio | 0 |
-
-### Qué pasó
-
-_(Cero operaciones. Con ~68 operaciones al año repartidas en 3 pares, una semana en blanco es lo normal: el filtro de la EMA(200) descarta la mayoría de los cruces. Si pasan 4 semanas sin ninguna, entonces sí toca mirar si algo está bloqueando las entradas.)_
-
-### Qué me sorprendió
-
-_(Lo que no esperabas. Si nada te sorprendió, escribe «nada» — pero piénsalo dos veces: lo que te sorprende es la diferencia entre tu modelo mental del sistema y lo que el sistema hace de verdad.)_
-
-### Qué cambiaría
-
-_(Ideas, NO cambios ejecutados. Durante el dry-run no se toca nada.)_
-
-### Cómo va contra el backtest
-
-```bash
-python tools/report.py --backtest "$(ls -t user_data/backtest_results/*.zip | head -1)" --dry-run user_data/tradesv3.dryrun.sqlite
-```
-
-_(Con 0 operaciones acumuladas la comparación todavía no significa nada. Por debajo de ~30 cualquier desviación es ruido.)_
-
-### Decisiones tomadas
-
-_(«Ninguna» es una respuesta válida y, durante el dry-run, la esperada.)_
-
----
-
-
 ## Semana del 2026-08-20 — construcción (T1–T10) y arranque del dry-run
 
 **Fase:** desarrollo → dry-run

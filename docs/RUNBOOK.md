@@ -269,6 +269,84 @@ docker compose logs | grep -i "balance\|authenticat"
 
 ---
 
+## Síntoma: `disk I/O error` de SQLite, o el bot deja de latir a ratos
+
+**En Telegram:** `🟠 Bot sin latido — el proceso responde pero no está
+procesando velas`, a veces varias veces por noche.
+
+**En los logs:** `sqlite3.OperationalError: disk I/O error`, o
+`unable to open database file`.
+
+### Causa: el Mac se suspende
+
+macOS entra en *Maintenance Sleep* aunque esté enchufado y con la tapa abierta.
+Cuando lo hace, la máquina virtual de Docker se congela con él — el bot y el
+vigilante incluidos. Al despertar, el bot lleva 15-20 minutos sin procesar
+velas.
+
+Comprobarlo:
+
+```bash
+pmset -g log | grep -E "Entering Sleep|Wake from" | tail -20
+```
+
+Compara esas horas con los huecos del heartbeat (recuerda que el contenedor
+loguea en UTC).
+
+### Por qué rompía la base de datos
+
+SQLite mantiene el archivo abierto durante toda la vida del proceso. En un
+*bind mount* de macOS, esos descriptores quedan inválidos tras la suspensión, y
+a partir de ahí **toda** operación contra la base falla — aunque
+`PRAGMA integrity_check` siga diciendo `ok`. El archivo está sano; el proceso ya
+no puede escribirlo.
+
+Con una posición abierta, eso es un bot incapaz de registrar lo que hace.
+
+**Ya está resuelto:** la base de datos vive en un volumen nombrado de Docker
+(`db:/freqtrade/db`), sobre el ext4 de la máquina virtual, donde los bloqueos
+funcionan y sobreviven a la suspensión. Si vuelves a ver `disk I/O error`,
+comprueba que el `docker-compose.yml` no ha vuelto al *bind mount*.
+
+Para leer la base desde el host:
+
+```bash
+python tools/exportar_db.py
+```
+
+`report.py` y `entrada_journal.py` la exportan solas antes de leer.
+
+### Qué hacer si pasa igualmente
+
+```bash
+docker compose restart freqtrade    # handle nuevo, se recupera al instante
+```
+
+### Cómo evitar la suspensión
+
+**Apaño para el dry-run** — mantener el Mac despierto mientras corre el bot:
+
+```bash
+caffeinate -dimsu &
+```
+
+Evita la suspensión por inactividad. **No evita la de cerrar la tapa**: si
+cierras el portátil, se duerme igual.
+
+**La solución de verdad es un VPS.** Es lo que dice el plan y esta noche es la
+demostración: un portátil no es una máquina de 24/7. Con dinero real, cada
+suspensión es una ventana en la que nadie mueve el trailing ni ejecuta un stop.
+Hetzner o DigitalOcean, ~5 USD/mes.
+
+### Qué hace el vigilante ahora
+
+Distingue los dos casos por sí solo: si su propio ciclo de espera tardó mucho
+más de lo pedido, sabe que se paró la máquina entera y avisa de
+**«el equipo estuvo suspendido»** en lugar de «bot atascado». Si el bot se cuelga
+sin que haya habido suspensión, sigue avisando como fallo.
+
+---
+
 ## Síntoma: se filtró el token de Telegram
 
 Cuenta como filtración si el token apareció en **cualquier** sitio que no sea

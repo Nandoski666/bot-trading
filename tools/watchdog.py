@@ -110,6 +110,7 @@ def cargar_estado() -> dict:
         "bloqueo_diario_activo": False,
         "kill_switch_disparado": None,
         "fallos_seguidos": 0,
+        "ultima_pasada": None,
     }
 
 
@@ -161,7 +162,39 @@ def equity_actual(cliente: ClienteFreqtrade) -> float | None:
 FALLOS_ANTES_DE_AVISAR = 2
 
 
-def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict) -> bool:
+def detectar_suspension(estado: dict, intervalo: int | None) -> float | None:
+    """Devuelve los minutos que el ANFITRION estuvo suspendido, si lo estuvo.
+
+    Como se detecta sin salir del contenedor: el vigilante duerme `intervalo`
+    segundos entre pasadas. Si al despertar han pasado muchos mas segundos de
+    reloj de los que pidio dormir, no es que el bot se haya colgado — es que la
+    maquina entera estuvo parada, el vigilante incluido.
+
+    Importa distinguirlo porque las dos situaciones piden respuestas opuestas:
+
+      * bot colgado  -> el proceso esta roto, hay que reiniciarlo y mirar por que
+      * equipo suspendido -> el bot esta perfectamente; lo que falla es correr
+        esto en un portatil que se duerme
+
+    En un portatil pasa cada noche. Mandar "el bot esta atascado" cada vez
+    entrena a ignorar la alerta, y la proxima vez que sea de verdad tampoco se
+    mirara.
+    """
+    previa = estado.get("ultima_pasada")
+    if not previa or not intervalo:
+        return None
+
+    transcurrido = (datetime.now(timezone.utc)
+                    - datetime.fromisoformat(previa)).total_seconds()
+    # Margen generoso: el doble del intervalo mas un minuto. Por debajo de eso
+    # puede ser simple lentitud del sistema.
+    if transcurrido > intervalo * 2 + 60:
+        return (transcurrido - intervalo) / 60
+    return None
+
+
+def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict,
+                        suspension_min: float | None = None) -> bool:
     """True si el bot esta vivo y procesando."""
     try:
         salud = cliente.salud()
@@ -193,6 +226,24 @@ def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict) -> bool:
     silencio = (datetime.now(timezone.utc) - ultimo).total_seconds() / 60
 
     if silencio > MINUTOS_SIN_LATIDO:
+        if suspension_min is not None:
+            # El vigilante tambien estuvo parado: el bot no se colgo, se paro la
+            # maquina. No se avisa de un fallo que no existe; si el bot estuviera
+            # roto de verdad, la proxima pasada lo vera sin suspension de por
+            # medio y entonces si avisara.
+            print(f"  heartbeat: {silencio:.0f} min sin ciclo, pero el equipo estuvo "
+                  f"suspendido ~{suspension_min:.0f} min — no es un fallo del bot")
+            alerta_una_vez(estado, "equipo_suspendido",
+                           f"💤 *El equipo estuvo suspendido*\n\n"
+                           f"~{suspension_min:.0f} min sin actividad. El bot dejo de "
+                           "procesar velas durante ese rato y ya se recupero.\n\n"
+                           "*No es un fallo del bot.* Pero si ocurre con una posicion "
+                           "abierta, nadie mueve el trailing ni ejecuta el stop en ese "
+                           "intervalo.\n\n"
+                           "Solucion de fondo: un VPS. Apaño inmediato: `caffeinate`.",
+                           horas=12)
+            return False
+
         alerta_una_vez(estado, "sin_latido",
                        f"🟠 *Bot sin latido*\n\n"
                        f"Ultimo ciclo hace {silencio:.0f} min "
@@ -204,6 +255,7 @@ def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict) -> bool:
     estado["fallos_seguidos"] = 0
     estado["alertas_enviadas"].pop("sin_latido", None)
     estado["alertas_enviadas"].pop("bot_caido", None)
+    estado["alertas_enviadas"].pop("equipo_suspendido", None)
     print(f"  heartbeat: OK (ultimo ciclo hace {silencio:.1f} min)")
     return True
 
@@ -370,12 +422,22 @@ def enviar_resumen_diario(cliente: ClienteFreqtrade, estado: dict) -> None:
 
 # ===========================================================================
 
-def pasada(cliente: ClienteFreqtrade, simular: bool) -> int:
-    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"[{ahora}] vigilante")
+def pasada(cliente: ClienteFreqtrade, simular: bool,
+           intervalo: int | None = None) -> int:
+    ahora = datetime.now(timezone.utc)
+    print(f"[{ahora:%Y-%m-%d %H:%M:%S} UTC] vigilante")
 
     estado = cargar_estado()
-    vivo = comprobar_heartbeat(cliente, estado)
+    suspension = detectar_suspension(estado, intervalo)
+    if suspension is not None:
+        print(f"  el equipo estuvo suspendido ~{suspension:.0f} min desde la ultima pasada")
+
+    vivo = comprobar_heartbeat(cliente, estado, suspension)
+
+    # La marca se guarda pase lo que pase: si solo se registrara en las pasadas
+    # correctas, tras un fallo se perderia la referencia para detectar la
+    # siguiente suspension.
+    estado["ultima_pasada"] = ahora.isoformat()
 
     if not vivo:
         guardar_estado(estado)
@@ -395,6 +457,7 @@ def pasada(cliente: ClienteFreqtrade, simular: bool) -> int:
     ok_diario = comprobar_perdida_diaria(cliente, estado, equity, simular) if ok_dd else False
 
     enviar_resumen_diario(cliente, estado)
+    estado["ultima_pasada"] = datetime.now(timezone.utc).isoformat()
     guardar_estado(estado)
     return 0 if (ok_dd and ok_diario) else 1
 
@@ -411,7 +474,10 @@ def main() -> int:
     cliente = ClienteFreqtrade(args.url)
 
     if args.once:
-        return pasada(cliente, args.simular)
+        # Sin bucle no hay pasada previa con la que comparar, asi que no se
+        # intenta detectar suspension: se pasa el intervalo igualmente por si
+        # se ejecuta desde cron con una cadencia fija.
+        return pasada(cliente, args.simular, args.intervalo)
 
     print(f"Vigilante en marcha — una pasada cada {args.intervalo} s. Ctrl-C para salir.")
     print(f"Limites: perdida diaria {PERDIDA_DIARIA_MAXIMA:.0%} · "
@@ -423,7 +489,7 @@ def main() -> int:
     try:
         while True:
             try:
-                pasada(cliente, args.simular)
+                pasada(cliente, args.simular, args.intervalo)
             except Exception as exc:            # noqa: BLE001
                 # Un vigilante que se cae por un error puntual deja de vigilar
                 # justo cuando mas falta hace. Se registra y se sigue.

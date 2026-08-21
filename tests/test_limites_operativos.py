@@ -439,3 +439,85 @@ def test_el_limite_diario_pausa_pero_no_detiene(entorno):
     )
     assert "pausar" in bot.llamadas
     assert "detener" not in bot.llamadas
+
+
+# ===========================================================================
+# Suspension del equipo vs. bot colgado
+# ===========================================================================
+
+def test_distingue_equipo_suspendido_de_bot_colgado(entorno):
+    """Un bot sin latir tras una suspension del equipo no es un bot roto.
+
+    En un portatil que se duerme —el caso de macOS con «Maintenance Sleep»— la
+    maquina entera se congela, el vigilante incluido. Al despertar, el bot lleva
+    20 minutos sin procesar velas y parece atascado.
+
+    Se detecta desde dentro del contenedor sin ayuda del sistema anfitrion: si
+    el vigilante pidio dormir 300 s y han pasado 1.500 s de reloj, no fue el bot
+    quien se paro, fue todo.
+
+    Importa porque un portatil se duerme cada noche: avisar de «bot atascado»
+    cada vez entrena a ignorar la alerta, y la vez que sea de verdad tampoco se
+    mirara.
+    """
+    bot = BotFalso()
+    bot.ultimo_ciclo = datetime.now(timezone.utc) - timedelta(minutes=20)
+
+    # Ultima pasada hace 25 minutos con un intervalo de 5: el vigilante tambien
+    # estuvo congelado.
+    estado = {
+        "pico_equity": None, "dia_actual": None, "equity_inicio_dia": None,
+        "ultimo_resumen": None, "alertas_enviadas": {},
+        "bloqueo_diario_activo": False, "kill_switch_disparado": None,
+        "fallos_seguidos": 0,
+        "ultima_pasada": (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat(),
+    }
+    watchdog.ESTADO.write_text(json.dumps(estado), encoding="utf-8")
+
+    watchdog.pasada(bot, simular=False, intervalo=300)
+
+    atascado = [m for m in entorno["mensajes"] if "sin latido" in m.lower()]
+    suspendido = [m for m in entorno["mensajes"] if "suspendido" in m.lower()]
+
+    assert not atascado, "se aviso de bot atascado cuando el equipo estuvo suspendido"
+    assert suspendido, "no se aviso de la suspension del equipo"
+    assert "VPS" in suspendido[0], "el aviso no dice como resolverlo"
+
+
+def test_bot_atascado_sin_suspension_si_avisa(entorno):
+    """Si el vigilante corrio con normalidad, un bot sin latir SI es un fallo.
+
+    Es la otra mitad del test anterior: la deteccion de suspension no puede
+    convertirse en una excusa que silencie los cuelgues de verdad.
+    """
+    bot = BotFalso()
+    bot.ultimo_ciclo = datetime.now(timezone.utc) - timedelta(minutes=20)
+
+    estado = {
+        "pico_equity": None, "dia_actual": None, "equity_inicio_dia": None,
+        "ultimo_resumen": None, "alertas_enviadas": {},
+        "bloqueo_diario_activo": False, "kill_switch_disparado": None,
+        "fallos_seguidos": 0,
+        # Pasada previa hace 5 minutos: justo lo esperado, sin suspension.
+        "ultima_pasada": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+    }
+    watchdog.ESTADO.write_text(json.dumps(estado), encoding="utf-8")
+
+    watchdog.pasada(bot, simular=False, intervalo=300)
+
+    assert any("latido" in m.lower() for m in entorno["mensajes"]), (
+        "no se aviso de un bot genuinamente atascado"
+    )
+
+
+def test_la_marca_de_pasada_se_guarda_aunque_falle(entorno):
+    """Sin marca no hay forma de detectar la siguiente suspension.
+
+    Si solo se registrara en las pasadas correctas, un fallo dejaria al
+    vigilante ciego a la suspension siguiente.
+    """
+    bot = BotFalso(vivo=False)
+    watchdog.pasada(bot, simular=False, intervalo=300)
+
+    estado = json.loads(watchdog.ESTADO.read_text())
+    assert estado.get("ultima_pasada"), "no se registro la marca tras un fallo"
