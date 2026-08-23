@@ -1,12 +1,57 @@
-# La estrategia, en español y sin código
+# Las estrategias, en español y sin código
 
-Este documento explica **qué** hace el sistema y **por qué**. Si no puedes
-explicarle a alguien lo que hay aquí, no deberías operarlo con dinero. Cuando
-el bot haga algo raro, este documento es la referencia contra la que comparar.
+El sistema corre **cinco estrategias en paralelo**, cada una en su propio bot,
+con su propia cartera simulada de 1.000 USDT. Todas comparten exactamente las
+mismas reglas de riesgo.
+
+| Bot | Estrategia | Qué compra | Puerto |
+|---|---|---|---|
+| `baseline` | BaselineTrend | el arranque de un impulso alcista | 8080 |
+| `orochi` | Orochi | el rechazo de precios por debajo del área de valor | 8081 |
+| `reversion` | ReversionRSI | el retroceso profundo dentro de una tendencia | 8082 |
+| `ruptura` | RupturaDonchian | la salida de un rango tras comprimirse | 8083 |
+| `momentum` | MomentumMultiple | el momento coherente en varios horizontes | 8084 |
+
+Son cinco **momentos distintos del ciclo de un mercado**, no cinco variantes de
+la misma idea. Esa es la única razón defendible para correr varias: si todas
+apostaran a lo mismo, no habría diversificación — habría una sola apuesta
+ejecutada cinco veces, pagando cinco veces las comisiones.
 
 ---
 
-## Idea de fondo
+## Lo que dicen los datos
+
+Backtest 2021-01 → 2024-06, 12 pares, **con 0.30 % de coste por operación
+completa**:
+
+| Estrategia | Operaciones | Beneficio | Max DD | Bruto por operación |
+|---|---:|---:|---:|---:|
+| ReversionRSI | 120 | −10.0 % | 11.4 % | −0.311 % |
+| Orochi | 207 | −21.1 % | 22.3 % | −0.250 % |
+| BaselineTrend | 875 | −51.0 % | 52.1 % | −0.120 % |
+| RupturaDonchian | 1.920 | −94.1 % | 94.1 % | −0.443 % |
+| MomentumMultiple | 3.007 | −98.3 % | 98.3 % | −0.626 % |
+
+**Correlación entre número de operaciones y pérdida: −0.95.** Cuanto más opera
+una estrategia, más pierde, y casi en proporción exacta.
+
+La columna que decide es la última: el **bruto por operación**, lo que habría
+dejado cada operación en un mundo sin comisiones. **Las cinco son negativas.**
+Eso significa que el problema no son las comisiones — son la mitad del daño,
+pero solo la mitad. Ninguna de estas señales predice nada.
+
+Es un resultado incómodo y es información real. Ninguna pasa los criterios
+go/no-go y ninguna debe llegar a dinero real.
+
+Reproducirlo:
+
+```bash
+python tools/comparar_estrategias.py
+```
+
+---
+
+## BaselineTrend — idea de fondo
 
 Es un sistema **seguidor de tendencia**. No intenta predecir nada. Su apuesta,
 que es una hipótesis sobre el mercado y no una certeza, es esta:
@@ -182,6 +227,23 @@ riesgo, nunca aumentarlo.
 ---
 
 ## Los límites que no se negocian
+
+### Cinco bots comparten una sola cuenta en live
+
+En dry-run cada bot tiene su propia cartera simulada, así que los límites de
+abajo se aplican a cada uno por separado y son comparables entre sí.
+
+**En dinero real eso deja de ser cierto.** Los cinco compartirían una única
+cuenta de Binance: cinco bots × 3 posiciones × 0.5 % de riesgo = hasta **7.5 %
+de la cuenta expuesto a la vez**, cuando la regla del plan dice 1.5 %.
+
+Antes de tocar dinero real hay que hacer una de dos cosas:
+
+1. repartir el capital entre los bots (`dry_run_wallet` / número de bots), o
+2. correr **una sola** estrategia, la que haya sobrevivido a la validación.
+
+La segunda es la correcta. Correr cinco es una fase de exploración, no una
+forma de operar.
 
 | Límite | Valor | Qué pasa al tocarlo |
 |---|---|---|

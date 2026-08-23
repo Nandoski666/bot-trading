@@ -16,7 +16,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-PARES=("BTC/USDT" "ETH/USDT" "SOL/USDT")
+# Universo ampliado a 12 pares liquidos (seccion 9 del plan: "ampliar el
+# universo a 10-15 pares liquidos"). Mas pares = mas oportunidades para las
+# mismas reglas, sin relajar ninguna condicion de entrada.
+PARES=("BTC/USDT" "ETH/USDT" "SOL/USDT" "BNB/USDT" "XRP/USDT" "ADA/USDT" "AVAX/USDT" "LINK/USDT" "DOT/USDT" "POL/USDT" "LTC/USDT" "ATOM/USDT")
 TIMEFRAMES=("1h" "1d")   # 1d se usa para el benchmark buy-and-hold y validacion cruzada
 # Empieza 2 meses antes del inicio del backtest (2021-01-01) a proposito:
 # la estrategia necesita 600 velas de calentamiento para que la EMA(200)

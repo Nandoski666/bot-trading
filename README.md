@@ -1,5 +1,8 @@
 # Bot de trading algorítmico — cripto spot
 
+**Cinco estrategias en paralelo**, cada una en su bot, todas con las mismas
+reglas de riesgo y todas medidas contra los mismos criterios.
+
 Sistema de trading automatizado sobre **Binance spot**, construido con
 [Freqtrade](https://www.freqtrade.io/). El valor de este repositorio no está en
 la estrategia (la baseline es deliberadamente estándar), sino en la **máquina de
@@ -194,13 +197,13 @@ lo que hay que vigilar son cosas que ocurren cuando el bot deja de funcionar.
 ### ¿Está funcionando?
 
 ```bash
-python tools/estado.py
+python tools/estado.py              # los cinco bots de un vistazo
+python tools/estado.py --bot orochi # uno solo, con señales por par
 ```
 
-Muestra, para cada par, cuál de las cuatro condiciones de entrada se cumple
-ahora mismo y cuál no — con los valores reales que el bot acaba de calcular.
-Es la forma de distinguir «esperando correctamente» de «colgado» durante las
-semanas en las que no pasa nada.
+Muestra si cada bot está procesando, qué posiciones tiene y cuántas señales de
+entrada ha producido su estrategia últimamente. Es la forma de distinguir
+«esperando correctamente» de «colgado».
 
 ### Rutina semanal del dry-run
 

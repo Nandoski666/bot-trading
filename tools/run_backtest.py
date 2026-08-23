@@ -154,7 +154,7 @@ def main() -> int:
     p.add_argument("--strategy", default="BaselineTrend")
     p.add_argument("--config", default="user_data/config.dryrun.json")
     p.add_argument("--datadir", default="user_data/data")
-    p.add_argument("--pares", nargs="*", default=["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+    p.add_argument("--pares", nargs="*", default=["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "POL/USDT", "LTC/USDT", "ATOM/USDT"])
     p.add_argument("--timeframe", default="1h")
     p.add_argument("--etiqueta", default=None, help="sufijo para el nombre del reporte")
     p.add_argument(

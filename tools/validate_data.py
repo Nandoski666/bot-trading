@@ -36,7 +36,7 @@ from pathlib import Path
 import pandas as pd
 
 # Universo y parametros fijados en el plan (seccion 2).
-PARES = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+PARES = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "POL/USDT", "LTC/USDT", "ATOM/USDT"]
 TIMEFRAME = "1h"
 UMBRAL_FALTANTES_PCT = 0.5   # definicion de hecho de T2
 GAP_MAXIMO_VELAS = 2         # un gap > 2 velas se reporta explicitamente

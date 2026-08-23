@@ -66,7 +66,7 @@ if not Path(FREQTRADE).exists():
 # sobre el sistema real.
 COMISION_EFECTIVA = 0.0015
 
-PARES = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+PARES = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "POL/USDT", "LTC/USDT", "ATOM/USDT"]
 UMBRAL_DEGRADACION = 0.40   # definicion de hecho del ticket
 SEMILLA = 42
 

@@ -88,6 +88,17 @@ class BotFalso:
         return {"result": "todo cerrado"}
 
 
+def sub_estado(bot: "BotFalso") -> dict:
+    """Sub-estado del bot dentro del archivo del vigilante.
+
+    El vigilante paso de seguir un bot a seguir cinco, asi que su estado ahora
+    esta anidado por bot. Los tests leen a traves de este helper para no
+    depender de la forma exacta del JSON.
+    """
+    todo = json.loads(watchdog.ESTADO.read_text())
+    return todo["bots"][bot.base_url]
+
+
 @pytest.fixture
 def entorno(tmp_path, monkeypatch):
     """Aisla el estado del vigilante y captura los mensajes de Telegram."""
@@ -191,7 +202,7 @@ def test_nuevo_dia_levanta_el_bloqueo(entorno, monkeypatch):
 
     bot.equity = 9_600.0     # -4 % -> bloquea
     watchdog.pasada(bot, simular=False)
-    assert json.loads(watchdog.ESTADO.read_text())["bloqueo_diario_activo"]
+    assert sub_estado(bot)["bloqueo_diario_activo"]
 
     # Manana.
     manana = date.today() + timedelta(days=1)
@@ -204,7 +215,7 @@ def test_nuevo_dia_levanta_el_bloqueo(entorno, monkeypatch):
     monkeypatch.setattr(watchdog, "date", FechaFalsa)
     watchdog.pasada(bot, simular=False)
 
-    estado = json.loads(watchdog.ESTADO.read_text())
+    estado = sub_estado(bot)
     assert estado["bloqueo_diario_activo"] is False
     assert estado["equity_inicio_dia"] == pytest.approx(9_600.0), \
         "la referencia del nuevo dia debe ser el equity actual, no el de ayer"
@@ -390,8 +401,7 @@ def test_el_kill_switch_queda_enclavado(entorno):
     avisos = [m for m in entorno["mensajes"] if "KILL SWITCH" in m]
     assert len(avisos) == 1, f"se enviaron {len(avisos)} alertas de kill switch"
 
-    estado = json.loads(watchdog.ESTADO.read_text())
-    assert estado["kill_switch_disparado"], "no quedo constancia del disparo"
+    assert sub_estado(bot)["kill_switch_disparado"], "no quedo constancia del disparo"
 
 
 def test_el_kill_switch_recibe_la_url_del_bot(entorno):
@@ -465,14 +475,10 @@ def test_distingue_equipo_suspendido_de_bot_colgado(entorno):
 
     # Ultima pasada hace 25 minutos con un intervalo de 5: el vigilante tambien
     # estuvo congelado.
-    estado = {
-        "pico_equity": None, "dia_actual": None, "equity_inicio_dia": None,
-        "ultimo_resumen": None, "alertas_enviadas": {},
-        "bloqueo_diario_activo": False, "kill_switch_disparado": None,
-        "fallos_seguidos": 0,
+    watchdog.ESTADO.write_text(json.dumps({
+        "bots": {},
         "ultima_pasada": (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat(),
-    }
-    watchdog.ESTADO.write_text(json.dumps(estado), encoding="utf-8")
+    }), encoding="utf-8")
 
     watchdog.pasada(bot, simular=False, intervalo=300)
 
@@ -493,15 +499,11 @@ def test_bot_atascado_sin_suspension_si_avisa(entorno):
     bot = BotFalso()
     bot.ultimo_ciclo = datetime.now(timezone.utc) - timedelta(minutes=20)
 
-    estado = {
-        "pico_equity": None, "dia_actual": None, "equity_inicio_dia": None,
-        "ultimo_resumen": None, "alertas_enviadas": {},
-        "bloqueo_diario_activo": False, "kill_switch_disparado": None,
-        "fallos_seguidos": 0,
+    watchdog.ESTADO.write_text(json.dumps({
+        "bots": {},
         # Pasada previa hace 5 minutos: justo lo esperado, sin suspension.
         "ultima_pasada": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
-    }
-    watchdog.ESTADO.write_text(json.dumps(estado), encoding="utf-8")
+    }), encoding="utf-8")
 
     watchdog.pasada(bot, simular=False, intervalo=300)
 
@@ -521,3 +523,71 @@ def test_la_marca_de_pasada_se_guarda_aunque_falle(entorno):
 
     estado = json.loads(watchdog.ESTADO.read_text())
     assert estado.get("ultima_pasada"), "no se registro la marca tras un fallo"
+
+
+# ===========================================================================
+# Varios bots a la vez
+# ===========================================================================
+
+def test_cada_bot_lleva_su_propia_contabilidad(entorno):
+    """El drawdown de un bot no puede bloquear a los otros cuatro.
+
+    Con cinco estrategias corriendo, cada una tiene su cartera simulada. Si el
+    vigilante mezclara sus equities, el kill switch de la peor pararia a las
+    cinco — y se perderia justo la informacion por la que se corren varias: cual
+    aguanta y cual no.
+    """
+    sano = BotFalso(equity=10_000.0)
+    sano.base_url = "http://bot-sano:8080"
+    hundido = BotFalso(equity=10_000.0)
+    hundido.base_url = "http://bot-hundido:8080"
+
+    watchdog.pasada([sano, hundido], simular=False)
+
+    hundido.equity = 8_000.0          # -20 % desde su pico
+    watchdog.pasada([sano, hundido], simular=False)
+
+    assert entorno["kill_switch"], "no salto el kill switch del bot hundido"
+    assert not sano.pausado and not sano.detenido, (
+        "el bot sano quedo detenido por el drawdown de otro"
+    )
+
+    todo = json.loads(watchdog.ESTADO.read_text())
+    assert todo["bots"]["http://bot-hundido:8080"]["kill_switch_disparado"]
+    assert not todo["bots"]["http://bot-sano:8080"]["kill_switch_disparado"]
+
+
+def test_un_bot_caido_no_impide_vigilar_los_demas(entorno):
+    """Si uno no responde, los otros se siguen comprobando.
+
+    Sin esto, el primer bot caido de la lista dejaria a los cuatro restantes sin
+    vigilancia y sin que nadie lo notara.
+    """
+    caido = BotFalso(vivo=False)
+    caido.base_url = "http://bot-caido:8080"
+    vivo = BotFalso(equity=10_000.0)
+    vivo.base_url = "http://bot-vivo:8080"
+
+    watchdog.pasada([caido, vivo], simular=False)
+    watchdog.pasada([caido, vivo], simular=False)
+
+    todo = json.loads(watchdog.ESTADO.read_text())
+    assert "http://bot-vivo:8080" in todo["bots"], "no se llego a comprobar el bot vivo"
+    assert todo["bots"]["http://bot-vivo:8080"]["pico_equity"] == 10_000.0
+    assert any("no responde" in m.lower() for m in entorno["mensajes"])
+
+
+def test_las_alertas_dicen_que_bot_fallo(entorno):
+    """Un mensaje que dice «Bot sin latido» sin decir cual es inutil con cinco."""
+    bot = BotFalso()
+    bot.base_url = "http://bot-orochi:8080"
+    bot.nombre = "orochi"
+    bot.ultimo_ciclo = datetime.now(timezone.utc) - timedelta(
+        minutes=watchdog.MINUTOS_SIN_LATIDO + 5)
+
+    for _ in range(2):
+        watchdog.pasada([bot], simular=False)
+
+    avisos = [m for m in entorno["mensajes"] if "latido" in m.lower()]
+    assert avisos, "no se aviso"
+    assert "orochi" in avisos[0], f"la alerta no identifica al bot: {avisos[0]}"

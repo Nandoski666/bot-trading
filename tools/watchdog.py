@@ -95,23 +95,34 @@ def enviar_telegram(mensaje: str, silencioso: bool = False) -> bool:
 # ===========================================================================
 
 def cargar_estado() -> dict:
-    """Estado entre pasadas: pico de equity, dia en curso, alertas ya enviadas."""
+    """Estado global. Contiene un sub-estado por bot vigilado.
+
+    Cada bot lleva su propio pico de equity, su propio limite diario y su propio
+    enclavamiento de kill switch: son cuentas simuladas independientes y mezclar
+    sus contabilidades haria que el drawdown de uno bloqueara a los demas.
+    """
     if ESTADO.exists():
         try:
-            return json.loads(ESTADO.read_text())
+            estado = json.loads(ESTADO.read_text())
+            estado.setdefault("bots", {})
+            estado.setdefault("ultima_pasada", None)
+            return estado
         except json.JSONDecodeError:
             print("  (estado corrupto, se reinicia)", file=sys.stderr)
-    return {
+    return {"bots": {}, "ultima_pasada": None, "ultimo_resumen": None}
+
+
+def estado_de_bot(estado: dict, nombre: str) -> dict:
+    """Sub-estado de un bot concreto, creandolo si es la primera vez."""
+    return estado["bots"].setdefault(nombre, {
         "pico_equity": None,
         "dia_actual": None,
         "equity_inicio_dia": None,
-        "ultimo_resumen": None,
         "alertas_enviadas": {},
         "bloqueo_diario_activo": False,
         "kill_switch_disparado": None,
         "fallos_seguidos": 0,
-        "ultima_pasada": None,
-    }
+    })
 
 
 def guardar_estado(estado: dict) -> None:
@@ -194,7 +205,8 @@ def detectar_suspension(estado: dict, intervalo: int | None) -> float | None:
 
 
 def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict,
-                        suspension_min: float | None = None) -> bool:
+                        suspension_min: float | None = None,
+                        nombre: str = "bot") -> bool:
     """True si el bot esta vivo y procesando."""
     try:
         salud = cliente.salud()
@@ -203,16 +215,16 @@ def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict,
         seguidos = estado["fallos_seguidos"]
 
         if seguidos < FALLOS_ANTES_DE_AVISAR:
-            print(f"  heartbeat: sin respuesta ({seguidos}/{FALLOS_ANTES_DE_AVISAR}) — "
+            print(f"    heartbeat: sin respuesta ({seguidos}/{FALLOS_ANTES_DE_AVISAR}) — "
                   "puede ser un reinicio; se espera a la proxima pasada")
             return False
 
         alerta_una_vez(estado, "bot_caido",
-                       f"🔴 *Bot no responde*\n\n"
+                       f"🔴 *{nombre}: no responde*\n\n"
                        f"{seguidos} comprobaciones seguidas sin respuesta.\n\n{exc}\n\n"
                        "Si hay posiciones abiertas, revisalas en Binance.\n"
                        "Ver `docs/RUNBOOK.md`.")
-        print(f"  heartbeat: SIN RESPUESTA ({seguidos} seguidas) — {exc}")
+        print(f"    heartbeat: SIN RESPUESTA ({seguidos} seguidas) — {exc}")
         return False
 
     marca = salud.get("last_process")
@@ -231,10 +243,10 @@ def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict,
             # maquina. No se avisa de un fallo que no existe; si el bot estuviera
             # roto de verdad, la proxima pasada lo vera sin suspension de por
             # medio y entonces si avisara.
-            print(f"  heartbeat: {silencio:.0f} min sin ciclo, pero el equipo estuvo "
+            print(f"    heartbeat: {silencio:.0f} min sin ciclo, pero el equipo estuvo "
                   f"suspendido ~{suspension_min:.0f} min — no es un fallo del bot")
             alerta_una_vez(estado, "equipo_suspendido",
-                           f"💤 *El equipo estuvo suspendido*\n\n"
+                           f"💤 *{nombre}: el equipo estuvo suspendido*\n\n"
                            f"~{suspension_min:.0f} min sin actividad. El bot dejo de "
                            "procesar velas durante ese rato y ya se recupero.\n\n"
                            "*No es un fallo del bot.* Pero si ocurre con una posicion "
@@ -245,23 +257,24 @@ def comprobar_heartbeat(cliente: ClienteFreqtrade, estado: dict,
             return False
 
         alerta_una_vez(estado, "sin_latido",
-                       f"🟠 *Bot sin latido*\n\n"
+                       f"🟠 *{nombre}: sin latido*\n\n"
                        f"Ultimo ciclo hace {silencio:.0f} min "
                        f"(umbral {MINUTOS_SIN_LATIDO} min).\n"
                        "El proceso responde pero no esta procesando velas.")
-        print(f"  heartbeat: ATASCADO — sin ciclo desde hace {silencio:.0f} min")
+        print(f"    heartbeat: ATASCADO — sin ciclo desde hace {silencio:.0f} min")
         return False
 
     estado["fallos_seguidos"] = 0
     estado["alertas_enviadas"].pop("sin_latido", None)
     estado["alertas_enviadas"].pop("bot_caido", None)
     estado["alertas_enviadas"].pop("equipo_suspendido", None)
-    print(f"  heartbeat: OK (ultimo ciclo hace {silencio:.1f} min)")
+    print(f"    heartbeat: OK (ultimo ciclo hace {silencio:.1f} min)")
     return True
 
 
 def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
-                             equity: float, simular: bool) -> bool:
+                             equity: float, simular: bool,
+                             nombre: str = "bot") -> bool:
     """Al superar el 3 % de perdida en el dia, deja de abrir posiciones."""
     hoy = date.today().isoformat()
 
@@ -275,7 +288,7 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
                 "🟢 *Nuevo dia*\n\nSe levanta el bloqueo por perdida diaria.\n"
                 "El bot puede volver a abrir posiciones — mandale `/start` "
                 "si sigue pausado.")
-        print(f"  dia nuevo: equity de referencia {equity:,.2f}")
+        print(f"    dia nuevo: equity de referencia {equity:,.2f}")
         return True
 
     referencia = estado.get("equity_inicio_dia") or equity
@@ -283,7 +296,7 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
         return True
 
     variacion = (equity - referencia) / referencia
-    print(f"  perdida diaria: {variacion:+.2%} (limite {-PERDIDA_DIARIA_MAXIMA:.2%})")
+    print(f"    perdida diaria: {variacion:+.2%} (limite {-PERDIDA_DIARIA_MAXIMA:.2%})")
 
     if variacion > -PERDIDA_DIARIA_MAXIMA:
         return True
@@ -291,16 +304,16 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
     if estado["bloqueo_diario_activo"]:
         return False   # ya bloqueado, no repetir
 
-    mensaje = (f"🟠 *Limite de perdida diaria alcanzado*\n\n"
+    mensaje = (f"🟠 *{nombre}: limite de perdida diaria*\n\n"
                f"Perdida hoy: *{variacion:.2%}* (limite {PERDIDA_DIARIA_MAXIMA:.0%})\n"
                f"Equity: {equity:,.2f} (inicio del dia: {referencia:,.2f})\n\n"
                "El bot queda *pausado*: no abrira posiciones nuevas, pero sigue "
                "gestionando las abiertas (trailing y stop activos).\n"
                "*No se reactiva solo:* revisa que paso antes de darle a `/start`.")
-    print(f"  LIMITE DIARIO SUPERADO ({variacion:.2%})")
+    print(f"    LIMITE DIARIO SUPERADO ({variacion:.2%})")
 
     if simular:
-        print("  [simulacion] se habria pausado el bot")
+        print("    [simulacion] se habria pausado el bot")
         return False
 
     # PAUSAR, no detener: las posiciones abiertas tienen que seguir
@@ -310,7 +323,7 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
         cliente.pausar()
         estado["bloqueo_diario_activo"] = True
         enviar_telegram(mensaje)
-        print("  bot pausado (no abrira posiciones; las abiertas siguen gestionadas)")
+        print("    bot pausado (no abrira posiciones; las abiertas siguen gestionadas)")
     except ErrorAPI as exc:
         enviar_telegram(f"🔴 *No se pudo pausar el bot*\n\n{mensaje}\n\nError: {exc}")
         print(f"  ERROR al pausar: {exc}", file=sys.stderr)
@@ -318,7 +331,8 @@ def comprobar_perdida_diaria(cliente: ClienteFreqtrade, estado: dict,
 
 
 def comprobar_drawdown(cliente: ClienteFreqtrade, estado: dict,
-                       equity: float, simular: bool) -> bool:
+                       equity: float, simular: bool,
+                       nombre: str = "bot") -> bool:
     """Al superar el 10 % de drawdown desde el maximo, dispara el kill switch."""
     pico = estado.get("pico_equity")
     if pico is None or equity > pico:
@@ -326,7 +340,7 @@ def comprobar_drawdown(cliente: ClienteFreqtrade, estado: dict,
         pico = equity
 
     drawdown = (pico - equity) / pico if pico > 0 else 0.0
-    print(f"  drawdown total: {drawdown:.2%} "
+    print(f"    drawdown total: {drawdown:.2%} "
           f"(pico {pico:,.2f} → actual {equity:,.2f}, limite {DRAWDOWN_TOTAL_MAXIMO:.0%})")
 
     if drawdown < DRAWDOWN_TOTAL_MAXIMO:
@@ -338,22 +352,22 @@ def comprobar_drawdown(cliente: ClienteFreqtrade, estado: dict,
     # se queda disparado hasta que un humano borre el estado a mano — que es
     # justo la barrera que se quiere: reiniciar exige haber mirado que paso.
     if estado.get("kill_switch_disparado"):
-        print(f"  kill switch YA DISPARADO el {estado['kill_switch_disparado']} — "
+        print(f"    kill switch YA DISPARADO el {estado['kill_switch_disparado']} — "
               "el bot sigue detenido")
-        print(f"  para rearmar: borra {ESTADO} despues de diagnosticar el incidente")
+        print(f"    para rearmar: borra {ESTADO} despues de diagnosticar el incidente")
         return False
 
-    mensaje = (f"🔴 *KILL SWITCH — drawdown maximo superado*\n\n"
+    mensaje = (f"🔴 *{nombre}: KILL SWITCH — drawdown maximo*\n\n"
                f"Drawdown: *{drawdown:.2%}* (limite {DRAWDOWN_TOTAL_MAXIMO:.0%})\n"
                f"Pico: {pico:,.2f} → actual: {equity:,.2f}\n\n"
                "Cerrando todas las posiciones y deteniendo el bot.\n\n"
                "*No reinicies sin entender que paso.* Reiniciar sin diagnostico "
                "repite la perdida.")
-    print(f"  DRAWDOWN MAXIMO SUPERADO ({drawdown:.2%}) — kill switch")
+    print(f"    DRAWDOWN MAXIMO SUPERADO ({drawdown:.2%}) — kill switch")
     enviar_telegram(mensaje)
 
     if simular:
-        print("  [simulacion] se habria disparado el kill switch")
+        print("    [simulacion] se habria disparado el kill switch")
         return False
 
     estado["kill_switch_disparado"] = datetime.now(timezone.utc).isoformat(
@@ -367,7 +381,7 @@ def comprobar_drawdown(cliente: ClienteFreqtrade, estado: dict,
          "--url", cliente.base_url, "--confirm",
          "--motivo", f"drawdown {drawdown:.2%} > {DRAWDOWN_TOTAL_MAXIMO:.0%}"],
         cwd=RAIZ, capture_output=True, text=True)
-    print("  " + "\n  ".join(r.stdout.splitlines()[-8:]))
+    print("    " + "\n    ".join(r.stdout.splitlines()[-8:]))
 
     if r.returncode != 0:
         enviar_telegram("🔴 *El kill switch no pudo completarse.*\n\n"
@@ -375,43 +389,54 @@ def comprobar_drawdown(cliente: ClienteFreqtrade, estado: dict,
     return False
 
 
-def enviar_resumen_diario(cliente: ClienteFreqtrade, estado: dict) -> None:
-    """Resumen diario por Telegram (definicion de hecho de T8)."""
+def enviar_resumen_diario(clientes, estado: dict) -> None:
+    """Un solo resumen diario con las cinco estrategias comparadas.
+
+    Comparadas y no por separado: cinco mensajes sueltos no dejan ver lo unico
+    que importa cuando se corren varias a la vez, que es cual lo esta haciendo
+    mejor y cual esta sangrando.
+    """
     hoy = date.today().isoformat()
     if estado.get("ultimo_resumen") == hoy:
         return
 
-    try:
-        beneficio = cliente.beneficio()
-        balance = cliente.balance()
-        abiertas = cliente.posiciones_abiertas()
-        diario = cliente.resumen_diario(2)
-    except ErrorAPI as exc:
-        print(f"  resumen diario: no se pudo componer ({exc})")
+    lineas = [f"📊 *Resumen diario* — {hoy}", ""]
+    total_equity = 0.0
+    total_ops = 0
+    hubo_datos = False
+
+    for cliente in clientes:
+        nombre = getattr(cliente, "nombre", None) or getattr(cliente, "base_url", "bot")
+        try:
+            beneficio = cliente.beneficio()
+            balance = cliente.balance()
+            abiertas = cliente.posiciones_abiertas()
+        except ErrorAPI:
+            lineas.append(f"· *{nombre}*: sin respuesta")
+            continue
+
+        hubo_datos = True
+        equity = balance.get("total", 0)
+        total_equity += equity
+        ops = beneficio.get("closed_trade_count", 0)
+        total_ops += ops
+
+        eb = estado_de_bot(estado, nombre)
+        marca = " ⏸" if eb.get("bloqueo_diario_activo") else ""
+        marca += " 🛑" if eb.get("kill_switch_disparado") else ""
+
+        lineas.append(
+            f"· *{nombre}*{marca}: {beneficio.get('profit_closed_percent', 0):+.2f} % "
+            f"· {ops} ops · {len(abiertas)} abiertas"
+        )
+        for t in abiertas:
+            lineas.append(f"    {t['pair']} {(t.get('profit_ratio') or 0) * 100:+.2f} %")
+
+    if not hubo_datos:
         return
 
-    dias = diario.get("data", [])
-    ayer = dias[1] if len(dias) > 1 else (dias[0] if dias else {})
-    moneda = balance.get("stake", "USDT")
-
-    lineas = [
-        f"📊 *Resumen diario* — {hoy}",
-        "",
-        f"Equity: *{balance.get('total', 0):,.2f} {moneda}*",
-        f"Beneficio acumulado: *{beneficio.get('profit_closed_percent', 0):+.2f} %* "
-        f"({beneficio.get('profit_closed_coin', 0):+,.2f} {moneda})",
-        f"Operaciones cerradas: {beneficio.get('closed_trade_count', 0)}",
-        f"Win rate: {beneficio.get('winrate', 0) * 100:.1f} %",
-        "",
-        f"Ayer: {ayer.get('abs_profit', 0):+,.2f} {moneda} "
-        f"en {ayer.get('trade_count', 0)} operaciones",
-        f"Posiciones abiertas: {len(abiertas)}",
-    ]
-    for t in abiertas:
-        lineas.append(f"  · {t['pair']} {(t.get('profit_ratio') or 0) * 100:+.2f} %")
-
-    if estado.get("bloqueo_diario_activo"):
-        lineas += ["", "⚠️ *Bloqueado por perdida diaria.* No abrira posiciones."]
+    lineas += ["", f"Equity total simulada: *{total_equity:,.2f} USDT*",
+               f"Operaciones cerradas en total: {total_ops}"]
 
     if enviar_telegram("\n".join(lineas)):
         estado["ultimo_resumen"] = hoy
@@ -422,64 +447,99 @@ def enviar_resumen_diario(cliente: ClienteFreqtrade, estado: dict) -> None:
 
 # ===========================================================================
 
-def pasada(cliente: ClienteFreqtrade, simular: bool,
-           intervalo: int | None = None) -> int:
+def pasada_bot(cliente: ClienteFreqtrade, estado: dict, nombre: str,
+               simular: bool, suspension: float | None) -> int:
+    """Comprobaciones de UN bot. Devuelve 0 si todo esta en orden."""
+    eb = estado_de_bot(estado, nombre)
+    print(f"  [{nombre}]")
+
+    vivo = comprobar_heartbeat(cliente, eb, suspension, nombre)
+    if not vivo:
+        return 1
+
+    equity = equity_actual(cliente)
+    if equity is None:
+        print("    no se pudo leer el balance; se omiten los limites")
+        return 1
+
+    # El drawdown total se comprueba ANTES que la perdida diaria: es el limite
+    # mas grave y su respuesta (cerrar todo) engloba a la del otro.
+    ok_dd = comprobar_drawdown(cliente, eb, equity, simular, nombre)
+    ok_diario = (comprobar_perdida_diaria(cliente, eb, equity, simular, nombre)
+                 if ok_dd else False)
+    return 0 if (ok_dd and ok_diario) else 1
+
+
+def pasada(clientes, simular: bool, intervalo: int | None = None) -> int:
+    """Una ronda completa sobre todos los bots vigilados.
+
+    Acepta un cliente suelto o una lista: los tests usan uno, produccion usa
+    cinco. Un unico vigilante para todos y no cinco vigilantes en paralelo,
+    porque asi el resumen diario llega en un solo mensaje comparando las cinco
+    estrategias — que es justo la informacion util cuando corren a la vez.
+    """
+    if not isinstance(clientes, (list, tuple)):
+        clientes = [clientes]
+
     ahora = datetime.now(timezone.utc)
-    print(f"[{ahora:%Y-%m-%d %H:%M:%S} UTC] vigilante")
+    print(f"[{ahora:%Y-%m-%d %H:%M:%S} UTC] vigilante — {len(clientes)} bot(s)")
 
     estado = cargar_estado()
     suspension = detectar_suspension(estado, intervalo)
     if suspension is not None:
         print(f"  el equipo estuvo suspendido ~{suspension:.0f} min desde la ultima pasada")
 
-    vivo = comprobar_heartbeat(cliente, estado, suspension)
+    problemas = 0
+    for cliente in clientes:
+        nombre = getattr(cliente, "nombre", None) or getattr(cliente, "base_url", "bot")
+        try:
+            problemas += pasada_bot(cliente, estado, nombre, simular, suspension)
+        except Exception as exc:                     # noqa: BLE001
+            # Un bot que falla de forma inesperada no puede dejar sin vigilancia
+            # a los otros cuatro.
+            print(f"  [{nombre}] error inesperado: {exc}", file=sys.stderr)
+            problemas += 1
 
-    # La marca se guarda pase lo que pase: si solo se registrara en las pasadas
-    # correctas, tras un fallo se perderia la referencia para detectar la
-    # siguiente suspension.
-    estado["ultima_pasada"] = ahora.isoformat()
-
-    if not vivo:
-        guardar_estado(estado)
-        return 1
-
-    equity = equity_actual(cliente)
-    if equity is None:
-        print("  no se pudo leer el balance; se omiten los limites en esta pasada")
-        guardar_estado(estado)
-        return 1
-
-    # El drawdown total se comprueba ANTES que la perdida diaria: es el limite
-    # mas grave y su respuesta (cerrar todo) engloba a la del otro (dejar de
-    # abrir). Al reves, se detendria el bot y luego el kill switch actuaria
-    # sobre un bot ya parado.
-    ok_dd = comprobar_drawdown(cliente, estado, equity, simular)
-    ok_diario = comprobar_perdida_diaria(cliente, estado, equity, simular) if ok_dd else False
-
-    enviar_resumen_diario(cliente, estado)
+    enviar_resumen_diario(clientes, estado)
     estado["ultima_pasada"] = datetime.now(timezone.utc).isoformat()
     guardar_estado(estado)
-    return 0 if (ok_dd and ok_diario) else 1
+    return 0 if problemas == 0 else 1
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Vigilante de limites operativos")
-    p.add_argument("--url", default="http://127.0.0.1:8080")
+    p.add_argument("--url", action="append", default=None,
+                   help="URL de un bot. Repetible: --url http://a:8080 --url http://b:8080. "
+                        "Opcionalmente con nombre: nombre=http://host:puerto")
     p.add_argument("--once", action="store_true", help="una sola pasada (cron)")
     p.add_argument("--intervalo", type=int, default=300, help="segundos entre pasadas")
     p.add_argument("--simular", action="store_true",
                    help="comprueba y reporta, pero no detiene ni cierra nada")
     args = p.parse_args()
 
-    cliente = ClienteFreqtrade(args.url)
+    urls = args.url or ["http://127.0.0.1:8080"]
+    clientes = []
+    for entrada in urls:
+        # Formato opcional "nombre=url" para que las alertas digan que estrategia
+        # fallo y no una URL con puerto, que no le dice nada a nadie a las 3 AM.
+        if "=" in entrada and not entrada.startswith("http"):
+            nombre, _, url = entrada.partition("=")
+        else:
+            nombre, url = entrada, entrada
+        cliente = ClienteFreqtrade(url)
+        cliente.nombre = nombre
+        clientes.append(cliente)
 
     if args.once:
         # Sin bucle no hay pasada previa con la que comparar, asi que no se
         # intenta detectar suspension: se pasa el intervalo igualmente por si
         # se ejecuta desde cron con una cadencia fija.
-        return pasada(cliente, args.simular, args.intervalo)
+        return pasada(clientes, args.simular, args.intervalo)
 
-    print(f"Vigilante en marcha — una pasada cada {args.intervalo} s. Ctrl-C para salir.")
+    print(f"Vigilante en marcha — {len(clientes)} bot(s), una pasada cada "
+          f"{args.intervalo} s. Ctrl-C para salir.")
+    for c in clientes:
+        print(f"  · {c.nombre}  ->  {c.base_url}")
     print(f"Limites: perdida diaria {PERDIDA_DIARIA_MAXIMA:.0%} · "
           f"drawdown total {DRAWDOWN_TOTAL_MAXIMO:.0%} · "
           f"heartbeat {MINUTOS_SIN_LATIDO} min")
@@ -489,7 +549,7 @@ def main() -> int:
     try:
         while True:
             try:
-                pasada(cliente, args.simular, args.intervalo)
+                pasada(clientes, args.simular, args.intervalo)
             except Exception as exc:            # noqa: BLE001
                 # Un vigilante que se cae por un error puntual deja de vigilar
                 # justo cuando mas falta hace. Se registra y se sigue.

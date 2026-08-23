@@ -1,12 +1,28 @@
-# Bot de trading algorítmico — entorno reproducible
+# Bot de trading algoritmico — cinco estrategias en paralelo
+#
+# Freqtrade corre UNA estrategia por proceso. Para operar cinco a la vez hacen
+# falta cinco contenedores, cada uno con su base de datos, su puerto y su
+# cartera simulada. No es un capricho de diseno: es como funciona la
+# herramienta, y ademas es lo correcto — cada estrategia se mide por separado y
+# el fallo de una no arrastra a las demas.
 #
 # Uso:
-#   docker compose run --rm freqtrade --version        # verificar instalación
-#   docker compose up -d                               # levantar el bot (dry-run)
-#   docker compose logs -f                             # ver logs
-#   docker compose down                                # detener
+#   docker compose run --rm baseline --version   # verificar instalacion
+#   docker compose up -d                         # levantar las cinco + vigilante
+#   docker compose logs -f orochi                # seguir una
+#   docker compose ps                            # estado de todas
+#   docker compose down                          # detener
 #
-# Las credenciales NUNCA van en este archivo: se leen de .env (que está en .gitignore).
+# AVISO SOBRE DINERO REAL
+# -----------------------
+# En dry-run cada bot tiene su propia cartera simulada de 1.000 USDT, asi que
+# las cinco son comparables entre si y ninguna interfiere con otra.
+#
+# En LIVE eso NO se cumple: los cinco compartirian una sola cuenta de Binance.
+# Cinco bots x 3 posiciones x 0.5 % de riesgo = hasta 7.5 % de la cuenta
+# expuesto a la vez, cuando la regla del plan dice 1.5 %. Antes de tocar dinero
+# real hay que repartir el capital entre los bots (dry_run_wallet / N) o correr
+# uno solo. Ver docs/STRATEGY.md.
 
 services:
   # ---------------------------------------------------------------------------
@@ -14,11 +30,8 @@ services:
   #
   # Docker crea los volumenes nombrados con dueño root cuando la ruta de montaje
   # no existe en la imagen. Freqtrade corre como ftuser (uid 1000), asi que sin
-  # este paso el bot arranca y muere con
+  # este paso los bots arrancan y mueren con
   # "sqlite3.OperationalError: unable to open database file".
-  #
-  # Corre una vez, ajusta el dueño y termina. Los demas servicios esperan a que
-  # acabe con `service_completed_successfully`.
   # ---------------------------------------------------------------------------
   db-init:
     image: freqtradeorg/freqtrade:stable
@@ -29,113 +42,269 @@ services:
     entrypoint: ["sh", "-c", "mkdir -p /freqtrade/db && chown -R 1000:1000 /freqtrade/db"]
     restart: "no"
 
-  freqtrade:
+  # ---------------------------------------------------------------------------
+  # baseline — BaselineTrend
+  # ---------------------------------------------------------------------------
+  baseline:
     image: freqtradeorg/freqtrade:stable
-    container_name: freqtrade
+    container_name: ft-baseline
     restart: unless-stopped
     depends_on:
       db-init:
         condition: service_completed_successfully
-    # Persistencia: todo el estado vive en user_data/ del host, así sobrevive
-    # a reinicios, recreaciones del contenedor y actualizaciones de imagen.
     volumes:
       - "./user_data:/freqtrade/user_data"
-      # La base de datos NO va en el bind mount de macOS.
-      #
-      # Docker Desktop expone ./user_data a traves de un sistema de archivos
-      # virtualizado. SQLite mantiene el archivo abierto durante toda la vida
-      # del proceso y depende de bloqueos POSIX; cuando el Mac se suspende, esos
-      # descriptores quedan invalidos y el bot empieza a dar
-      # "sqlite3.OperationalError: disk I/O error" en cada consulta, hasta
-      # reiniciar. El archivo no se corrompe — integrity_check sigue diciendo ok
-      # — pero el proceso ya no puede escribir. Con una posicion abierta, eso es
-      # un bot que no puede registrar lo que hace.
-      #
-      # Un volumen nombrado vive en el ext4 de la maquina virtual de Docker,
-      # donde los bloqueos funcionan como es debido y sobreviven a la suspension.
-      # Para leerlo desde el host: python tools/exportar_db.py
+      # La base de datos NO va en el bind mount de macOS: al suspenderse el
+      # equipo, los descriptores de archivo quedan invalidos y SQLite empieza a
+      # dar "disk I/O error" hasta reiniciar. Un volumen nombrado vive en el
+      # ext4 de la VM, donde los bloqueos sobreviven a la suspension.
       - "db:/freqtrade/db"
     ports:
-      # FreqUI + API REST. Se expone solo en loopback: nunca abrir a internet
-      # sin un reverse proxy con TLS y autenticación.
+      # Solo loopback. Nunca abrir a internet sin reverse proxy con TLS.
       - "127.0.0.1:8080:8080"
     env_file:
       - .env
     environment:
-      # Freqtrade mapea variables FREQTRADE__<seccion>__<clave> sobre el JSON.
-      # Esto permite inyectar secretos sin escribirlos en config.*.json.
       - FREQTRADE__EXCHANGE__KEY=${BINANCE_API_KEY:-}
       - FREQTRADE__EXCHANGE__SECRET=${BINANCE_API_SECRET:-}
       - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN:-}
       - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID:-}
-    # El vigilante espera a que esto pase a "healthy" antes de arrancar. Sin
-    # ello ambos contenedores arrancan a la vez, el vigilante pregunta antes de
-    # que la API este escuchando, y manda una falsa alarma de "bot caido" en
-    # cada reinicio. Una alerta que salta sin motivo se acaba ignorando.
-    # /api/v1/ping no pide autenticacion, asi que sirve sin credenciales.
+      - FREQTRADE__BOT_NAME=baseline
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/v1/ping', timeout=5).status == 200 else 1)"]
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 60s
-    # Comando por defecto: dry-run. Para live hay que cambiar el config
-    # explícitamente — nunca por accidente.
     command: >
       trade
-      --logfile /freqtrade/user_data/logs/freqtrade.log
-      --db-url sqlite:////freqtrade/db/tradesv3.dryrun.sqlite
+      --logfile /freqtrade/user_data/logs/baseline.log
+      --db-url sqlite:////freqtrade/db/baseline.sqlite
       --config /freqtrade/user_data/config.dryrun.json
       --strategy BaselineTrend
 
   # ---------------------------------------------------------------------------
-  # Vigilante (T9): heartbeat, limite de perdida diaria, kill switch por
-  # drawdown y resumen diario por Telegram.
+  # orochi — Orochi
+  # ---------------------------------------------------------------------------
+  orochi:
+    image: freqtradeorg/freqtrade:stable
+    container_name: ft-orochi
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+      # La base de datos NO va en el bind mount de macOS: al suspenderse el
+      # equipo, los descriptores de archivo quedan invalidos y SQLite empieza a
+      # dar "disk I/O error" hasta reiniciar. Un volumen nombrado vive en el
+      # ext4 de la VM, donde los bloqueos sobreviven a la suspension.
+      - "db:/freqtrade/db"
+    ports:
+      # Solo loopback. Nunca abrir a internet sin reverse proxy con TLS.
+      - "127.0.0.1:8081:8080"
+    env_file:
+      - .env
+    environment:
+      - FREQTRADE__EXCHANGE__KEY=${BINANCE_API_KEY:-}
+      - FREQTRADE__EXCHANGE__SECRET=${BINANCE_API_SECRET:-}
+      - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN:-}
+      - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - FREQTRADE__BOT_NAME=orochi
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/v1/ping', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/orochi.log
+      --db-url sqlite:////freqtrade/db/orochi.sqlite
+      --config /freqtrade/user_data/config.dryrun.json
+      --strategy Orochi
+
+  # ---------------------------------------------------------------------------
+  # reversion — ReversionRSI
+  # ---------------------------------------------------------------------------
+  reversion:
+    image: freqtradeorg/freqtrade:stable
+    container_name: ft-reversion
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+      # La base de datos NO va en el bind mount de macOS: al suspenderse el
+      # equipo, los descriptores de archivo quedan invalidos y SQLite empieza a
+      # dar "disk I/O error" hasta reiniciar. Un volumen nombrado vive en el
+      # ext4 de la VM, donde los bloqueos sobreviven a la suspension.
+      - "db:/freqtrade/db"
+    ports:
+      # Solo loopback. Nunca abrir a internet sin reverse proxy con TLS.
+      - "127.0.0.1:8082:8080"
+    env_file:
+      - .env
+    environment:
+      - FREQTRADE__EXCHANGE__KEY=${BINANCE_API_KEY:-}
+      - FREQTRADE__EXCHANGE__SECRET=${BINANCE_API_SECRET:-}
+      - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN:-}
+      - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - FREQTRADE__BOT_NAME=reversion
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/v1/ping', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/reversion.log
+      --db-url sqlite:////freqtrade/db/reversion.sqlite
+      --config /freqtrade/user_data/config.dryrun.json
+      --strategy ReversionRSI
+
+  # ---------------------------------------------------------------------------
+  # ruptura — RupturaDonchian
+  # ---------------------------------------------------------------------------
+  ruptura:
+    image: freqtradeorg/freqtrade:stable
+    container_name: ft-ruptura
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+      # La base de datos NO va en el bind mount de macOS: al suspenderse el
+      # equipo, los descriptores de archivo quedan invalidos y SQLite empieza a
+      # dar "disk I/O error" hasta reiniciar. Un volumen nombrado vive en el
+      # ext4 de la VM, donde los bloqueos sobreviven a la suspension.
+      - "db:/freqtrade/db"
+    ports:
+      # Solo loopback. Nunca abrir a internet sin reverse proxy con TLS.
+      - "127.0.0.1:8083:8080"
+    env_file:
+      - .env
+    environment:
+      - FREQTRADE__EXCHANGE__KEY=${BINANCE_API_KEY:-}
+      - FREQTRADE__EXCHANGE__SECRET=${BINANCE_API_SECRET:-}
+      - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN:-}
+      - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - FREQTRADE__BOT_NAME=ruptura
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/v1/ping', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/ruptura.log
+      --db-url sqlite:////freqtrade/db/ruptura.sqlite
+      --config /freqtrade/user_data/config.dryrun.json
+      --strategy RupturaDonchian
+
+  # ---------------------------------------------------------------------------
+  # momentum — MomentumMultiple
+  # ---------------------------------------------------------------------------
+  momentum:
+    image: freqtradeorg/freqtrade:stable
+    container_name: ft-momentum
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+      # La base de datos NO va en el bind mount de macOS: al suspenderse el
+      # equipo, los descriptores de archivo quedan invalidos y SQLite empieza a
+      # dar "disk I/O error" hasta reiniciar. Un volumen nombrado vive en el
+      # ext4 de la VM, donde los bloqueos sobreviven a la suspension.
+      - "db:/freqtrade/db"
+    ports:
+      # Solo loopback. Nunca abrir a internet sin reverse proxy con TLS.
+      - "127.0.0.1:8084:8080"
+    env_file:
+      - .env
+    environment:
+      - FREQTRADE__EXCHANGE__KEY=${BINANCE_API_KEY:-}
+      - FREQTRADE__EXCHANGE__SECRET=${BINANCE_API_SECRET:-}
+      - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN:-}
+      - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - FREQTRADE__BOT_NAME=momentum
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/v1/ping', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/momentum.log
+      --db-url sqlite:////freqtrade/db/momentum.sqlite
+      --config /freqtrade/user_data/config.dryrun.json
+      --strategy MomentumMultiple
+
+  # ---------------------------------------------------------------------------
+  # Vigilante: heartbeat, limite diario, kill switch y resumen diario.
   #
-  # Corre en un contenedor APARTE del bot, a proposito. La mitad de lo que tiene
-  # que vigilar son cosas que ocurren cuando el bot deja de funcionar: si
-  # viviera dentro del mismo proceso, el caso mas importante —que el bot muera—
-  # seria justo el que no podria detectar.
+  # UNO para los cinco, no cinco vigilantes. Asi el resumen diario llega en un
+  # solo mensaje comparando las estrategias, que es la informacion util cuando
+  # corren a la vez. Cada bot mantiene su contabilidad separada dentro del
+  # estado del vigilante: el drawdown de uno no bloquea a los demas.
+  #
+  # Corre en su propio contenedor a proposito: la mitad de lo que vigila son
+  # cosas que ocurren cuando un bot deja de funcionar.
   # ---------------------------------------------------------------------------
   watchdog:
     image: freqtradeorg/freqtrade:stable
-    container_name: freqtrade-watchdog
+    container_name: ft-watchdog
     restart: unless-stopped
     depends_on:
-      freqtrade:
+      baseline:
+        condition: service_healthy
+      orochi:
+        condition: service_healthy
+      reversion:
+        condition: service_healthy
+      ruptura:
+        condition: service_healthy
+      momentum:
         condition: service_healthy
     volumes:
       - "./user_data:/freqtrade/user_data"
       - "./tools:/freqtrade/tools:ro"
-      - "db:/freqtrade/db"
       - "./.env:/freqtrade/.env:ro"
+      - "db:/freqtrade/db"
     env_file:
       - .env
     environment:
-      # El vigilante habla con el bot por la red interna de Compose, no por
-      # localhost: cada contenedor tiene el suyo.
-      - FREQTRADE_API_URL=http://freqtrade:8080
-      # Sin esto Python bufferiza stdout al no haber TTY, y `docker compose logs
-      # watchdog` sale vacio durante horas. Un vigilante cuyos logs no se ven no
-      # se puede auditar — y auditarlo es justo lo que se hace cuando algo va mal.
+      # Sin esto Python bufferiza stdout al no haber TTY y `docker compose logs
+      # watchdog` sale vacio durante horas.
       - PYTHONUNBUFFERED=1
     entrypoint: ["python", "-u"]
     command:
       - "/freqtrade/tools/watchdog.py"
-      - "--url"
-      - "http://freqtrade:8080"
       - "--intervalo"
       - "300"
+      - "--url"
+      - "baseline=http://baseline:8080"
+      - "--url"
+      - "orochi=http://orochi:8080"
+      - "--url"
+      - "reversion=http://reversion:8080"
+      - "--url"
+      - "ruptura=http://ruptura:8080"
+      - "--url"
+      - "momentum=http://momentum:8080"
 
 # ---------------------------------------------------------------------------
 # Volumenes nombrados
 # ---------------------------------------------------------------------------
 volumes:
-  # Estado del bot (SQLite). Fuera del bind mount a proposito — ver el
-  # comentario en el servicio freqtrade.
-  #
-  # Sobrevive a `docker compose down` y a las actualizaciones de imagen. Para
+  # Estado de los cinco bots (SQLite). Sobrevive a `docker compose down`; para
   # borrarlo de verdad hace falta `docker compose down -v`, que es justo la
-  # friccion que se quiere: perder este volumen es perder el historial de
-  # operaciones del dry-run.
+  # friccion que se quiere.
   db:
