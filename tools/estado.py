@@ -53,14 +53,21 @@ BOTS = {
 VELAS_SENALES = 200   # ventana para contar senales recientes
 
 
-def senales_recientes(cliente: ClienteFreqtrade, par: str) -> tuple[int, str | None]:
+def senales_recientes(cliente: ClienteFreqtrade, par: str,
+                      timeframe: str) -> tuple[int, str | None]:
     """Cuantas senales de entrada produjo la estrategia en las ultimas velas.
 
     Se lee del dataframe que el propio bot tiene analizado, asi que refleja
     exactamente lo que decidio — no un calculo paralelo que podria diferir.
+
+    El `timeframe` se pasa y no se fija: pedir "1h" a un bot que corre en 5m
+    devuelve un dataframe vacio, y el contador reportaba cero senales cuando en
+    realidad habia doce. Un cero por no haber preguntado bien se lee igual que
+    un cero de verdad, y ese es el peor tipo de fallo en una herramienta de
+    diagnostico.
     """
     datos = cliente._peticion("GET", "pair_candles",
-                              params={"pair": par, "timeframe": "1h",
+                              params={"pair": par, "timeframe": timeframe,
                                       "limit": VELAS_SENALES})
     columnas = datos.get("columns", [])
     filas = datos.get("data", [])
@@ -209,6 +216,7 @@ def revisar(nombre: str, puerto: int, detalle: bool) -> dict | None:
 
     equity = balance.get("total", 0)
     estrategia = config.get("strategy", "?")
+    estrategia_timeframe = config.get("timeframe", "5m")
     cerradas = beneficio.get("closed_trade_count", 0)
     pnl = beneficio.get("profit_closed_percent", 0)
 
@@ -226,23 +234,36 @@ def revisar(nombre: str, puerto: int, detalle: bool) -> dict | None:
               f"stake {t['stake_amount']:>7.2f}  {color}{p:>+6.2f} %{FIN}")
 
     if detalle:
-        pares = config.get("whitelist") or []
-        print(f"      {GRIS}senales de entrada en las ultimas {VELAS_SENALES} velas:{FIN}")
+        try:
+            pares = cliente.pares()
+        except ErrorAPI:
+            pares = []
+        if not pares:
+            # Antes esto se tragaba en silencio y se reportaba "ninguna senal",
+            # que es una conclusion muy distinta de "no se pudo comprobar".
+            print(f"      {ROJO}no se pudo obtener la lista de pares del bot{FIN}")
+        if pares:
+            print(f"      {GRIS}senales de entrada en las ultimas {VELAS_SENALES} velas "
+                  f"({len(pares)} pares):{FIN}")
         total_global = 0
         for par in pares:
             try:
-                n, ultima = senales_recientes(cliente, par)
+                n, ultima = senales_recientes(cliente, par, estrategia_timeframe)
             except ErrorAPI:
                 continue
             total_global += n
             if n:
                 marca = f" (ultima: {str(ultima)[:16]})" if ultima else ""
                 print(f"        {par:<11} {n:>3}{GRIS}{marca}{FIN}")
-        if total_global == 0:
-            print(f"        {AMARILLO}ninguna en ningun par{FIN} — la estrategia esta "
-                  f"esperando su condicion")
+        if not pares:
+            pass
+        elif total_global == 0:
+            print(f"        {AMARILLO}ninguna en {len(pares)} pares{FIN} — la estrategia "
+                  f"esta esperando su condicion")
         else:
             print(f"        {GRIS}total: {total_global} senales{FIN}")
+            print(f"        {GRIS}(son senales del HISTORIAL cargado; el bot solo puede "
+                  f"actuar\n         sobre las que ocurren mientras esta encendido){FIN}")
 
     return {"equity": equity, "abiertas": len(abiertas), "cerradas": cerradas, "pnl": pnl}
 

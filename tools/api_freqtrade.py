@@ -99,6 +99,17 @@ class ClienteFreqtrade:
     def estado_bot(self) -> dict:
         return self._peticion("GET", "show_config")
 
+    def pares(self) -> list[str]:
+        """Pares que el bot esta vigilando.
+
+        Van en su propio endpoint: `show_config` NO incluye la whitelist, y
+        buscarla ahi devuelve None en silencio — que es como estado.py acabo
+        reportando "ninguna senal en ningun par" cuando en realidad no habia
+        revisado ninguno.
+        """
+        datos = self._peticion("GET", "whitelist")
+        return datos.get("whitelist", []) if isinstance(datos, dict) else list(datos)
+
     def posiciones_abiertas(self) -> list[dict]:
         return self._peticion("GET", "status")
 
