@@ -97,11 +97,16 @@ def operaciones_cerradas(cliente: ClienteFreqtrade, limite: int = 500) -> list[d
 def mostrar_operaciones(seleccion: dict, limite: int) -> int:
     """Lista las operaciones cerradas de todos los bots, mas recientes primero."""
     todas = []
+    abiertas_ahora = 0
     for nombre, puerto in seleccion.items():
         cliente = ClienteFreqtrade(f"http://127.0.0.1:{puerto}", timeout=45)
         for t in operaciones_cerradas(cliente):
             t["_bot"] = nombre
             todas.append(t)
+        try:
+            abiertas_ahora += len(cliente.posiciones_abiertas())
+        except ErrorAPI:
+            pass
 
     if not todas:
         print("\n  Todavia no hay ninguna operacion cerrada.")
@@ -113,7 +118,14 @@ def mostrar_operaciones(seleccion: dict, limite: int) -> int:
 
     print()
     print("-" * 78)
-    print(f"  ULTIMAS OPERACIONES CERRADAS")
+    print("  ULTIMAS OPERACIONES CERRADAS")
+    if abiertas_ahora:
+        # Sin esta linea, ver siempre la misma lista mientras hay posiciones en
+        # curso parece que el bot esta parado. No lo esta: las abiertas todavia
+        # no tienen resultado y por eso no salen aqui.
+        print(f"  {AMARILLO}(hay {abiertas_ahora} posicion(es) abierta(s) ahora "
+              f"mismo — no salen en esta lista porque aun no tienen resultado; "
+              f"se ven arriba){FIN}")
     print("-" * 78)
     print(f"  {GRIS}{'':<2}{'bot':<11}{'par':<11}{'cerrada':<17}"
           f"{'duracion':>9}{'resultado':>12}{'USDT':>9}  motivo{FIN}")
