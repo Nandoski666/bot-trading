@@ -28,12 +28,22 @@ pero no realizar pérdidas en ese momento.
 
 | Comando | Qué hace |
 |---|---|
-| `/pause` | Deja de abrir. **Sigue gestionando** las abiertas. |
-| `/forceexit all` | Cierra todas las posiciones a mercado |
-| `/stop` | Para el bot **del todo** — ver el aviso de abajo |
-| `/status` | Posiciones abiertas y su P&L |
-| `/profit` | Resumen de resultados |
-| `/start` | Reanuda la apertura de posiciones |
+| `/estado` | Qué tiene abierto cada uno de los cinco bots |
+| `/ops` | Últimas operaciones cerradas, ganadas y perdidas |
+| `/pausar` | Los cinco dejan de abrir. **Siguen gestionando** las abiertas. |
+| `/reanudar` | Vuelven a operar |
+
+> **Quien responde es el vigilante, no los bots.** Telegram solo admite un
+> cliente haciendo `getUpdates` por token; con cinco bots compartiéndolo se
+> peleaban por el canal (`Conflict: terminated by other getUpdates`) y `/status`
+> lo contestaba uno al azar — normalmente uno sin posiciones.
+>
+> Por eso `FREQTRADE__TELEGRAM__ENABLED=false` en `.env` y el vigilante asume
+> las notificaciones y los comandos. Ventaja: sus respuestas comparan las cinco
+> estrategias en un solo mensaje.
+>
+> Para cerrar todo a mercado ya no hay comando de Telegram: usa
+> `python tools/kill_switch.py --confirm`.
 
 > ### `/pause` y `/stop` no son lo mismo
 >

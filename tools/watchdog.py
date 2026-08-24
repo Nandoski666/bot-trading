@@ -447,6 +447,194 @@ def enviar_resumen_diario(clientes, estado: dict) -> None:
 
 # ===========================================================================
 
+# ===========================================================================
+# Notificaciones de operaciones y comandos de Telegram
+# ===========================================================================
+#
+# Freqtrade trae su propia integracion con Telegram, pero solo sirve con UN bot:
+# Telegram admite un unico cliente haciendo getUpdates por token, asi que cinco
+# bots con el mismo token se pelean por el canal y responden al azar
+# ("Conflict: terminated by other getUpdates").
+#
+# Por eso el vigilante asume las dos funciones. Ventaja lateral: al hablar con
+# los cinco, sus respuestas comparan estrategias en un solo mensaje, que es lo
+# que de verdad interesa cuando corren varias a la vez.
+
+
+def notificar_operaciones(clientes, estado: dict) -> None:
+    """Avisa de las operaciones que se han CERRADO desde la ultima pasada.
+
+    Se comparan los identificadores vistos y no las fechas: el reloj del
+    contenedor y el del exchange no tienen por que coincidir, y una comparacion
+    por tiempo se salta operaciones o las repite.
+    """
+    vistos = estado.setdefault("operaciones_vistas", {})
+
+    for cliente in clientes:
+        nombre = getattr(cliente, "nombre", None) or getattr(cliente, "base_url", "bot")
+        try:
+            datos = cliente.operaciones_cerradas(200)
+        except ErrorAPI:
+            continue
+
+        operaciones = datos.get("trades", datos) if isinstance(datos, dict) else datos
+        conocidos = set(vistos.get(nombre, []))
+        nuevas = [t for t in operaciones if t.get("trade_id") not in conocidos]
+
+        # Primera vez que se ve este bot: se registra el historial sin avisar.
+        # Si no, al arrancar el vigilante mandaria un mensaje por cada operacion
+        # historica de golpe.
+        if not conocidos and operaciones:
+            vistos[nombre] = [t.get("trade_id") for t in operaciones]
+            continue
+
+        for t in sorted(nuevas, key=lambda x: x.get("close_timestamp") or 0):
+            beneficio = (t.get("profit_ratio") or 0) * 100
+            absoluto = t.get("profit_abs") or 0
+            icono = "🟢" if absoluto > 0 else "🔴"
+            minutos = t.get("trade_duration") or 0
+            duracion = f"{minutos:.0f} min" if minutos < 120 else f"{minutos/60:.1f} h"
+
+            enviar_telegram(
+                f"{icono} *{nombre}* cerro {t.get('pair','')}\n\n"
+                f"Resultado: *{beneficio:+.2f} %* ({absoluto:+.2f} USDT)\n"
+                f"Duracion: {duracion}\n"
+                f"Entrada {t.get('open_rate', 0):,.4f} → salida {t.get('close_rate', 0):,.4f}\n"
+                f"Motivo: `{t.get('exit_reason','')}`")
+
+        if nuevas:
+            vistos[nombre] = [t.get("trade_id") for t in operaciones]
+
+
+def _resumen_para_telegram(clientes) -> str:
+    """Texto de /estado: los cinco bots y sus posiciones, en un mensaje."""
+    lineas = ["📋 *Estado de los bots*", ""]
+    total_abiertas = 0
+    for cliente in clientes:
+        nombre = getattr(cliente, "nombre", "bot")
+        try:
+            b = cliente.beneficio()
+            bal = cliente.balance()
+            abiertas = cliente.posiciones_abiertas()
+        except ErrorAPI:
+            lineas.append(f"· *{nombre}*: sin respuesta")
+            continue
+
+        total_abiertas += len(abiertas)
+        lineas.append(
+            f"· *{nombre}*: {bal.get('total', 0):,.2f} USDT · "
+            f"{b.get('profit_closed_percent', 0):+.2f} % · "
+            f"{b.get('closed_trade_count', 0)} ops · {len(abiertas)} abiertas")
+        for t in abiertas:
+            lineas.append(
+                f"    {t['pair']} {(t.get('profit_ratio') or 0) * 100:+.2f} % "
+                f"(entrada {t['open_rate']:,.4f})")
+
+    if total_abiertas == 0:
+        lineas += ["", "_Ninguna posicion abierta ahora mismo._"]
+    return "\n".join(lineas)
+
+
+def _operaciones_para_telegram(clientes, limite: int = 10) -> str:
+    todas = []
+    for cliente in clientes:
+        nombre = getattr(cliente, "nombre", "bot")
+        try:
+            datos = cliente.operaciones_cerradas(200)
+        except ErrorAPI:
+            continue
+        ops = datos.get("trades", datos) if isinstance(datos, dict) else datos
+        for t in ops:
+            t["_bot"] = nombre
+            todas.append(t)
+
+    if not todas:
+        return "Todavia no hay ninguna operacion cerrada."
+
+    todas.sort(key=lambda t: t.get("close_timestamp") or 0, reverse=True)
+    ganadas = [t for t in todas if (t.get("profit_abs") or 0) > 0]
+    total = sum(t.get("profit_abs") or 0 for t in todas)
+
+    lineas = [f"📊 *Ultimas {min(limite, len(todas))} operaciones*", ""]
+    for t in todas[:limite]:
+        icono = "🟢" if (t.get("profit_abs") or 0) > 0 else "🔴"
+        lineas.append(f"{icono} {t['_bot']} {t.get('pair','')} "
+                      f"{(t.get('profit_ratio') or 0)*100:+.2f} %")
+    lineas += ["", f"*Total: {len(todas)} cerradas · {len(ganadas)} ganadas / "
+                   f"{len(todas)-len(ganadas)} perdidas*",
+               f"Win rate {len(ganadas)/len(todas)*100:.1f} % · "
+               f"acumulado {total:+.2f} USDT"]
+    return "\n".join(lineas)
+
+
+AYUDA = """🤖 *Comandos*
+
+/estado — que tiene abierto cada bot ahora
+/ops — ultimas operaciones cerradas y si se ganaron
+/pausar — los cinco dejan de abrir posiciones
+/reanudar — vuelven a operar
+/ayuda — esto
+
+Las notificaciones de cierre llegan solas."""
+
+
+def atender_comandos(clientes, estado: dict, timeout: int = 10) -> None:
+    """Escucha Telegram y responde. No lanza nunca.
+
+    Un fallo atendiendo comandos no puede tumbar el vigilante: su trabajo
+    principal es vigilar limites, y eso tiene que seguir pasando aunque
+    Telegram este caido.
+    """
+    cargar_env()
+    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
+    if not token:
+        return
+
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates",
+                         params={"offset": estado.get("offset_telegram", 0),
+                                 "timeout": timeout},
+                         timeout=timeout + 10)
+        if not r.ok:
+            return
+        actualizaciones = r.json().get("result", [])
+    except requests.RequestException:
+        return
+
+    for act in actualizaciones:
+        estado["offset_telegram"] = act["update_id"] + 1
+        texto = (act.get("message", {}).get("text") or "").strip().lower()
+        if not texto.startswith("/"):
+            continue
+        comando = texto.split()[0].split("@")[0]
+
+        try:
+            if comando in ("/estado", "/status"):
+                enviar_telegram(_resumen_para_telegram(clientes))
+            elif comando in ("/ops", "/operaciones", "/profit"):
+                enviar_telegram(_operaciones_para_telegram(clientes))
+            elif comando in ("/pausar", "/pause", "/stop"):
+                for c in clientes:
+                    try:
+                        c.pausar()
+                    except ErrorAPI:
+                        pass
+                enviar_telegram("⏸ Los cinco bots quedan *pausados*: no abriran "
+                                "posiciones nuevas.\nLas abiertas siguen "
+                                "gestionandose.\n\n/reanudar para volver.")
+            elif comando in ("/reanudar", "/start"):
+                for c in clientes:
+                    try:
+                        c.arrancar()
+                    except ErrorAPI:
+                        pass
+                enviar_telegram("▶️ Los cinco bots vuelven a operar.")
+            else:
+                enviar_telegram(AYUDA)
+        except Exception as exc:                  # noqa: BLE001
+            print(f"  error atendiendo {comando}: {exc}", file=sys.stderr)
+
+
 def pasada_bot(cliente: ClienteFreqtrade, estado: dict, nombre: str,
                simular: bool, suspension: float | None) -> int:
     """Comprobaciones de UN bot. Devuelve 0 si todo esta en orden."""
@@ -500,6 +688,7 @@ def pasada(clientes, simular: bool, intervalo: int | None = None) -> int:
             print(f"  [{nombre}] error inesperado: {exc}", file=sys.stderr)
             problemas += 1
 
+    notificar_operaciones(clientes, estado)
     enviar_resumen_diario(clientes, estado)
     estado["ultima_pasada"] = datetime.now(timezone.utc).isoformat()
     guardar_estado(estado)
@@ -555,7 +744,14 @@ def main() -> int:
                 # justo cuando mas falta hace. Se registra y se sigue.
                 print(f"  error en la pasada: {exc}", file=sys.stderr)
             print()
-            time.sleep(args.intervalo)
+            # En vez de dormir de un tiron, se atiende Telegram cada 10 s. Asi
+            # un /estado se responde al momento y no dentro de cinco minutos.
+            limite = time.monotonic() + args.intervalo
+            while time.monotonic() < limite:
+                estado = cargar_estado()
+                atender_comandos(clientes, estado)
+                guardar_estado(estado)
+                time.sleep(2)
     except KeyboardInterrupt:
         print("\nVigilante detenido.")
         return 0

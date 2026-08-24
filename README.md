@@ -225,6 +225,20 @@ Tres reglas que lo mantienen dentro de lo auditable:
 
 Hay tests que fallan si alguna de las tres se rompe.
 
+### Telegram
+
+El **vigilante** es la única voz en Telegram — los cinco bots tienen su
+integración desactivada a propósito (Telegram solo admite un cliente por token,
+y compartiéndolo se pelean por el canal).
+
+| Comando | Qué hace |
+|---|---|
+| `/estado` | qué tiene abierto cada bot |
+| `/ops` | últimas operaciones y si se ganaron |
+| `/pausar` · `/reanudar` | los cinco a la vez |
+
+Los cierres se notifican solos, con el nombre de la estrategia.
+
 ### ¿Está funcionando?
 
 ```bash

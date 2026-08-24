@@ -85,7 +85,7 @@
         }
     ],
     "telegram": {
-        "enabled": true,
+        "enabled": false,
         "//_credenciales": "Se inyectan por FREQTRADE__TELEGRAM__TOKEN / __CHAT_ID.",
         "token": "",
         "chat_id": "",
@@ -106,7 +106,8 @@
         },
         "balance_dust_level": 0.01,
         "reload": true,
-        "allow_custom_messages": true
+        "allow_custom_messages": true,
+        "//_por_que_desactivado": "Telegram solo admite UN cliente haciendo getUpdates por token. Con cinco bots compartiendo el mismo token se pelean por el canal ('Conflict: terminated by other getUpdates') y /status lo contesta uno al azar. Las notificaciones y los comandos los da el vigilante, que habla con los cinco y responde por todos."
     },
     "api_server": {
         "enabled": true,

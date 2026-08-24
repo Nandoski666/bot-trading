@@ -45,6 +45,7 @@ class BotFalso:
         self.vivo = vivo
         self.pausado = False
         self.detenido = False
+        self.cerradas: list[dict] = []
         self.posiciones: list[dict] = []
         self.ultimo_ciclo = datetime.now(timezone.utc)
         self.llamadas: list[str] = []
@@ -70,6 +71,11 @@ class BotFalso:
 
     def resumen_diario(self, dias: int = 7) -> dict:
         return {"data": [{"abs_profit": 0.0, "trade_count": 0}]}
+
+    def operaciones_cerradas(self, limite: int = 500) -> dict:
+        # El vigilante notifica los cierres nuevos; en los tests de limites no
+        # hay historial que reportar.
+        return {"trades": list(self.cerradas)}
 
     # --- escritura ---
     def pausar(self) -> dict:
@@ -591,3 +597,86 @@ def test_las_alertas_dicen_que_bot_fallo(entorno):
     avisos = [m for m in entorno["mensajes"] if "latido" in m.lower()]
     assert avisos, "no se aviso"
     assert "orochi" in avisos[0], f"la alerta no identifica al bot: {avisos[0]}"
+
+
+# ===========================================================================
+# Notificaciones de operaciones (el vigilante como unica voz en Telegram)
+# ===========================================================================
+
+def _op(id_, par, beneficio, cierre=1000):
+    return {"trade_id": id_, "pair": par, "profit_ratio": beneficio / 100,
+            "profit_abs": beneficio, "close_timestamp": cierre,
+            "trade_duration": 30, "open_rate": 100.0, "close_rate": 101.0,
+            "exit_reason": "trailing_stop_loss"}
+
+
+def test_la_primera_pasada_no_inunda_el_chat(entorno):
+    """Al arrancar, el historial se registra sin notificar.
+
+    Sin esto, un vigilante recien reiniciado mandaria un mensaje por cada
+    operacion historica de los cinco bots de golpe — cientos de notificaciones
+    que garantizan que el chat se silencie.
+    """
+    bot = BotFalso()
+    bot.cerradas = [_op(1, "BTC/USDT", 5), _op(2, "ETH/USDT", -3)]
+
+    watchdog.pasada([bot], simular=False)
+
+    cierres = [m for m in entorno["mensajes"] if "cerro" in m]
+    assert not cierres, f"notifico {len(cierres)} operaciones historicas al arrancar"
+
+
+def test_notifica_solo_las_operaciones_nuevas(entorno):
+    bot = BotFalso()
+    bot.cerradas = [_op(1, "BTC/USDT", 5)]
+    watchdog.pasada([bot], simular=False)      # registra el historial
+
+    bot.cerradas.append(_op(2, "ETH/USDT", -3.5))
+    watchdog.pasada([bot], simular=False)
+
+    cierres = [m for m in entorno["mensajes"] if "cerro" in m]
+    assert len(cierres) == 1, f"se enviaron {len(cierres)} avisos, se esperaba 1"
+    assert "ETH/USDT" in cierres[0]
+    assert "🔴" in cierres[0], "una operacion perdedora deberia marcarse en rojo"
+    assert "-3.50" in cierres[0]
+
+
+def test_distingue_ganadas_de_perdidas(entorno):
+    bot = BotFalso()
+    bot.cerradas = [_op(1, "BTC/USDT", 1)]
+    watchdog.pasada([bot], simular=False)
+
+    bot.cerradas.append(_op(2, "SOL/USDT", 7.25))
+    watchdog.pasada([bot], simular=False)
+
+    cierre = [m for m in entorno["mensajes"] if "cerro" in m][0]
+    assert "🟢" in cierre, "una operacion ganadora deberia marcarse en verde"
+    assert "+7.25" in cierre
+
+
+def test_no_repite_la_misma_operacion(entorno):
+    """Tres pasadas con el mismo historial: un aviso, no tres."""
+    bot = BotFalso()
+    bot.cerradas = [_op(1, "BTC/USDT", 1)]
+    watchdog.pasada([bot], simular=False)
+
+    bot.cerradas.append(_op(2, "ETH/USDT", 2))
+    for _ in range(3):
+        watchdog.pasada([bot], simular=False)
+
+    cierres = [m for m in entorno["mensajes"] if "cerro" in m]
+    assert len(cierres) == 1, f"se repitio el aviso {len(cierres)} veces"
+
+
+def test_las_notificaciones_identifican_la_estrategia(entorno):
+    """Con cinco bots, un aviso que no diga cual fue no sirve de nada."""
+    bot = BotFalso()
+    bot.nombre = "orochi"
+    bot.cerradas = [_op(1, "BTC/USDT", 1)]
+    watchdog.pasada([bot], simular=False)
+
+    bot.cerradas.append(_op(2, "ETH/USDT", -1))
+    watchdog.pasada([bot], simular=False)
+
+    cierre = [m for m in entorno["mensajes"] if "cerro" in m][0]
+    assert "orochi" in cierre
