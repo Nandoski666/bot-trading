@@ -14,12 +14,12 @@
     "tradable_balance_ratio": 0.99,
     "amend_last_stake_amount": true,
     "fiat_display_currency": "USD",
-    "timeframe": "1h",
     "trading_mode": "spot",
     "margin_mode": "",
     "cancel_open_orders_on_exit": false,
     "//_comisiones": "0.1% por lado (taker Binance) + 0.05% de slippage estimado.",
     "fee": 0.0015,
+    "//_timeframe": "NO poner 'timeframe' aqui. El config PISA al atributo de la estrategia, asi que fijarlo obliga a todas a usar el mismo y silenciosamente ignora el suyo. Cada estrategia declara el que necesita: 1h las normales, 5m las variantes *Rapida.",
     "unfilledtimeout": {
         "entry": 10,
         "exit": 10,

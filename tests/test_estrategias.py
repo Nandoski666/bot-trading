@@ -296,3 +296,42 @@ def test_no_opera_sin_volumen(estrategia):
     if "enter_long" in df.columns:
         assert int((df["enter_long"] == 1).sum()) == 0, (
             f"{estrategia.__name__} genero senales sobre velas sin volumen")
+
+
+# ===========================================================================
+# El config no puede pisar el timeframe de la estrategia
+# ===========================================================================
+
+def test_el_config_no_fija_el_timeframe():
+    """`timeframe` en config.json anula el de la estrategia, en silencio.
+
+    Freqtrade da prioridad al config sobre los atributos de clase. Con
+    `"timeframe": "1h"` puesto, las variantes *Rapida —que declaran 5m— corrian
+    en realidad a 1 hora, y nada lo avisaba: FreqUI mostraba "1h" junto al
+    nombre de la estrategia rapida y ahi se detecto.
+
+    Es peor que un error normal porque no falla: el sistema funciona, opera, y
+    mide otra cosa distinta de la que uno cree estar midiendo.
+    """
+    import json
+
+    for archivo in ("config.dryrun.json", "config.live.json"):
+        ruta = RAIZ / "user_data" / archivo
+        if not ruta.exists():
+            continue
+        cfg = json.loads(ruta.read_text(encoding="utf-8"))
+        assert "timeframe" not in cfg, (
+            f"{archivo} fija 'timeframe': anula el de cada estrategia sin avisar")
+
+
+@pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
+def test_cada_estrategia_declara_su_timeframe(estrategia):
+    assert estrategia.timeframe in ("5m", "15m", "1h", "4h"), (
+        f"{estrategia.__name__} usa un timeframe inesperado: {estrategia.timeframe}")
+
+
+def test_las_variantes_rapidas_son_de_cinco_minutos():
+    rapidas = [c for c in ESTRATEGIAS if c.__name__.endswith("Rapida")]
+    assert len(rapidas) == 5, f"se encontraron {len(rapidas)} variantes rapidas"
+    for c in rapidas:
+        assert c.timeframe == "5m", f"{c.__name__} no esta en 5m sino en {c.timeframe}"
