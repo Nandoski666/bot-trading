@@ -194,6 +194,37 @@ python tools/watchdog.py --intervalo 300
 El vigilante corre **al lado** del bot, no dentro. Es deliberado: la mitad de
 lo que hay que vigilar son cosas que ocurren cuando el bot deja de funcionar.
 
+### Velas de 5 minutos
+
+Los cinco bots corren las variantes `*Rapida`: mismo código de señal y mismo
+riesgo, pero sobre velas de 5 minutos. Las operaciones duran ~30 minutos en vez
+de horas, así que la maquinaria se verifica en 48 h en vez de en un mes.
+
+**No son una mejora.** Medido sobre 2024-02 → 2026-02, cuatro de las cinco
+pierden casi toda la cuenta simulada. El detalle y el porqué están en
+[`RAPIDAS.md`](user_data/backtest_results/comparativa/RAPIDAS.md).
+
+### Filtro de contexto con IA
+
+```bash
+python tools/filtro_ia.py --explicar
+```
+
+Cada hora, un contenedor pregunta a Claude si hay alguna razón de **contexto**
+para dejar de abrir posiciones, y escribe su veredicto en
+`user_data/decision_ia.json`. Las estrategias lo consultan antes de confirmar
+una entrada.
+
+Tres reglas que lo mantienen dentro de lo auditable:
+
+1. **Solo puede restar operaciones**, nunca provocarlas. No genera señales.
+2. **Se ignora por completo en backtest.** Si afectara al backtest, ningún
+   resultado histórico volvería a ser reproducible.
+3. **Falla abierto.** Sin `ANTHROPIC_API_KEY`, con la API caída o con el
+   veredicto caducado, se opera.
+
+Hay tests que fallan si alguna de las tres se rompe.
+
 ### ¿Está funcionando?
 
 ```bash
@@ -306,6 +337,8 @@ Si nada responde: cierra las posiciones a mano en Binance. Ver
 │   ├── watchdog.py             # heartbeat, límites, resumen diario
 │   ├── estado.py               # qué está viendo el bot ahora mismo
 │   ├── exportar_db.py          # saca el SQLite del volumen Docker al host
+│   ├── filtro_ia.py            # filtro de contexto con Claude (solo veta)
+│   ├── comparar_estrategias.py # tabla comparable de las cinco
 │   ├── setup_telegram.py       # asistente de configuración de Telegram
 │   └── entrada_journal.py      # entrada semanal del journal con datos reales
 ├── tests/                      # 92 tests

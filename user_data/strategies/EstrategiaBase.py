@@ -366,6 +366,59 @@ class EstrategiaBase(IStrategy):
         trade.set_custom_data("atr_entrada", atr)
         return atr
     # ==================================================================
+    # Filtro de contexto con IA (opcional)
+    # ==================================================================
+    def _ia_permite_operar(self) -> tuple[bool, str]:
+        """Consulta el veredicto del filtro de contexto. Nunca lanza.
+
+        Reglas de integracion, todas deliberadas:
+
+        1. **Solo en dry-run y live.** En backtest e hyperopt se ignora por
+           completo. Si el filtro afectara al backtest, ningun resultado
+           historico volveria a ser reproducible — y sin backtest reproducible
+           no queda forma de saber si el sistema funciona.
+
+        2. **Solo puede vetar.** Lee un archivo que otro proceso escribe; jamas
+           genera una entrada. La estrategia decide QUE comprar; el filtro solo
+           puede decir "hoy no".
+
+        3. **Falla abierto.** Sin archivo, con el archivo caducado, corrupto o
+           con la API caida, se opera. Que se caiga un servicio externo no puede
+           dejar las posiciones sin gestionar.
+
+        4. **Caduca.** Una opinion de hace ocho horas sobre el mercado de ahora
+           no es informacion. Pasada su vigencia se descarta sola.
+        """
+        modo = str(self.config.get("runmode", "")).lower()
+        if "backtest" in modo or "hyperopt" in modo or "edge" in modo:
+            return True, ""
+
+        try:
+            import json
+            from datetime import datetime, timedelta, timezone
+
+            archivo = Path(self.config.get("user_data_dir",
+                                           Path(__file__).resolve().parents[1])) / "decision_ia.json"
+            if not archivo.exists():
+                return True, ""
+
+            d = json.loads(archivo.read_text(encoding="utf-8"))
+            momento = datetime.fromisoformat(d["momento"])
+            if momento.tzinfo is None:
+                momento = momento.replace(tzinfo=timezone.utc)
+            vigencia = timedelta(hours=float(d.get("vigencia_horas", 6)))
+            if datetime.now(timezone.utc) - momento > vigencia:
+                return True, ""       # caducado: se ignora
+
+            if d.get("operar", True):
+                return True, ""
+            return False, str(d.get("motivo", "sin motivo"))[:200]
+        except Exception:             # noqa: BLE001
+            # Cualquier problema leyendo el veredicto: se opera. Es la unica
+            # opcion segura — un filtro roto no puede paralizar el sistema.
+            return True, ""
+
+    # ==================================================================
     # Confirmacion final antes de mandar la orden
     # ==================================================================
     def confirm_trade_entry(
@@ -389,6 +442,12 @@ class EstrategiaBase(IStrategy):
         """
         if side != "long":
             logger.error("Intento de abrir %s en spot. Rechazado.", side)
+            return False
+
+        permite, motivo = self._ia_permite_operar()
+        if not permite:
+            logger.info("Entrada en %s vetada por el filtro de contexto: %s",
+                        pair, motivo)
             return False
 
         abiertas = Trade.get_open_trade_count()

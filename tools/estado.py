@@ -80,8 +80,19 @@ def senales_recientes(cliente: ClienteFreqtrade, par: str) -> tuple[int, str | N
     return total, ultima
 
 
+def estado_latido(vivo: bool, silencio: float | None) -> str:
+    """Sufijo que describe el latido, incluido el caso de arranque en curso."""
+    if silencio is None:
+        return f"  {AMARILLO}← arrancando{FIN}"
+    if not vivo:
+        return f"  {ROJO}← sin latir ({silencio / 60:.0f} min){FIN}"
+    return ""
+
+
 def revisar(nombre: str, puerto: int, detalle: bool) -> dict | None:
-    cliente = ClienteFreqtrade(f"http://127.0.0.1:{puerto}")
+    # Timeout generoso: al arrancar, el bot descarga velas de 12 pares antes de
+    # atender la API, y 15 s no siempre bastan.
+    cliente = ClienteFreqtrade(f"http://127.0.0.1:{puerto}", timeout=45)
     try:
         salud = cliente.salud()
         config = cliente.estado_bot()
@@ -92,9 +103,18 @@ def revisar(nombre: str, puerto: int, detalle: bool) -> dict | None:
         print(f"  {ROJO}{nombre:<11}{FIN} sin respuesta — {str(exc)[:60]}")
         return None
 
-    ultimo = datetime.fromisoformat(str(salud["last_process"]).replace("Z", "+00:00"))
-    silencio = (datetime.now(timezone.utc) - ultimo).total_seconds()
-    vivo = silencio < 120
+    # Recien arrancado, el bot responde a la API pero todavia no ha completado un
+    # ciclo: `last_process` viene a None. Antes esto reventaba el script con
+    # "Invalid isoformat string: 'None'" — justo en el momento en que uno mira el
+    # estado, que es despues de reiniciar.
+    marca = salud.get("last_process")
+    if marca in (None, "None", ""):
+        silencio = None
+        vivo = True          # responde; solo esta calentando
+    else:
+        ultimo = datetime.fromisoformat(str(marca).replace("Z", "+00:00"))
+        silencio = (datetime.now(timezone.utc) - ultimo).total_seconds()
+        vivo = silencio < 120
 
     equity = balance.get("total", 0)
     estrategia = config.get("strategy", "?")
@@ -105,7 +125,7 @@ def revisar(nombre: str, puerto: int, detalle: bool) -> dict | None:
     print(f"  {VERDE if vivo else ROJO}●{FIN} {nombre:<11}{GRIS}{estrategia:<18}{FIN}"
           f"{equity:>10,.2f}  {color_pnl}{pnl:>+7.2f} %{FIN}"
           f"{cerradas:>6} ops  {len(abiertas)}/{MAX_POSICIONES_SIMULTANEAS} abiertas"
-          f"{'' if vivo else f'  {ROJO}← sin latir{FIN}'}")
+          f"{estado_latido(vivo, silencio)}")
 
     for t in abiertas:
         p = (t.get("profit_ratio") or 0) * 100

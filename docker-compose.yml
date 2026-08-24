@@ -81,7 +81,7 @@ services:
       --logfile /freqtrade/user_data/logs/baseline.log
       --db-url sqlite:////freqtrade/db/baseline.sqlite
       --config /freqtrade/user_data/config.dryrun.json
-      --strategy BaselineTrend
+      --strategy BaselineTrendRapida
 
   # ---------------------------------------------------------------------------
   # orochi — Orochi
@@ -122,7 +122,7 @@ services:
       --logfile /freqtrade/user_data/logs/orochi.log
       --db-url sqlite:////freqtrade/db/orochi.sqlite
       --config /freqtrade/user_data/config.dryrun.json
-      --strategy Orochi
+      --strategy OrochiRapida
 
   # ---------------------------------------------------------------------------
   # reversion — ReversionRSI
@@ -163,7 +163,7 @@ services:
       --logfile /freqtrade/user_data/logs/reversion.log
       --db-url sqlite:////freqtrade/db/reversion.sqlite
       --config /freqtrade/user_data/config.dryrun.json
-      --strategy ReversionRSI
+      --strategy ReversionRSIRapida
 
   # ---------------------------------------------------------------------------
   # ruptura — RupturaDonchian
@@ -204,7 +204,7 @@ services:
       --logfile /freqtrade/user_data/logs/ruptura.log
       --db-url sqlite:////freqtrade/db/ruptura.sqlite
       --config /freqtrade/user_data/config.dryrun.json
-      --strategy RupturaDonchian
+      --strategy RupturaDonchianRapida
 
   # ---------------------------------------------------------------------------
   # momentum — MomentumMultiple
@@ -245,7 +245,7 @@ services:
       --logfile /freqtrade/user_data/logs/momentum.log
       --db-url sqlite:////freqtrade/db/momentum.sqlite
       --config /freqtrade/user_data/config.dryrun.json
-      --strategy MomentumMultiple
+      --strategy MomentumMultipleRapida
 
   # ---------------------------------------------------------------------------
   # Vigilante: heartbeat, limite diario, kill switch y resumen diario.
@@ -299,6 +299,37 @@ services:
       - "ruptura=http://ruptura:8080"
       - "--url"
       - "momentum=http://momentum:8080"
+
+  # ---------------------------------------------------------------------------
+  # Filtro de contexto con IA.
+  #
+  # Evalua cada hora si hay alguna razon de CONTEXTO para dejar de abrir
+  # posiciones, y escribe su veredicto en user_data/decision_ia.json. Las
+  # estrategias lo leen antes de confirmar una entrada.
+  #
+  # Solo puede RESTAR operaciones, nunca provocarlas, y se ignora por completo
+  # en backtest — si afectara al backtest, ningun resultado historico volveria a
+  # ser reproducible.
+  #
+  # Sin ANTHROPIC_API_KEY no bloquea nada: falla abierto a proposito.
+  # ---------------------------------------------------------------------------
+  filtro-ia:
+    image: freqtradeorg/freqtrade:stable
+    container_name: ft-filtro-ia
+    restart: unless-stopped
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+      - "./tools:/freqtrade/tools:ro"
+      - "./.env:/freqtrade/.env:ro"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    entrypoint: ["sh", "-c"]
+    command:
+      - "pip install --quiet --no-warn-script-location anthropic pydantic >/dev/null 2>&1;
+         exec python -u /freqtrade/tools/filtro_ia.py --intervalo 3600"
+
 
 # ---------------------------------------------------------------------------
 # Volumenes nombrados
