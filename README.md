@@ -228,8 +228,9 @@ Hay tests que fallan si alguna de las tres se rompe.
 ### ¿Está funcionando?
 
 ```bash
-python tools/estado.py              # los cinco bots de un vistazo
-python tools/estado.py --bot orochi # uno solo, con señales por par
+python tools/estado.py               # los cinco bots de un vistazo
+python tools/estado.py --operaciones # + las operaciones cerradas, ganadas y perdidas
+python tools/estado.py --bot orochi  # uno solo, con señales por par
 ```
 
 Muestra si cada bot está procesando, qué posiciones tiene y cuántas señales de

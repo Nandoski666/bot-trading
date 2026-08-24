@@ -80,6 +80,85 @@ def senales_recientes(cliente: ClienteFreqtrade, par: str) -> tuple[int, str | N
     return total, ultima
 
 
+def operaciones_cerradas(cliente: ClienteFreqtrade, limite: int = 500) -> list[dict]:
+    """Historial de operaciones ya cerradas de un bot.
+
+    Solo cerradas: una posicion abierta no tiene resultado. Contarla con su
+    beneficio flotante inflaria las metricas justo en el sentido optimista, que
+    es como uno se convence de que un sistema funciona cuando no.
+    """
+    try:
+        datos = cliente.operaciones_cerradas(limite)
+    except ErrorAPI:
+        return []
+    return datos.get("trades", datos) if isinstance(datos, dict) else datos
+
+
+def mostrar_operaciones(seleccion: dict, limite: int) -> int:
+    """Lista las operaciones cerradas de todos los bots, mas recientes primero."""
+    todas = []
+    for nombre, puerto in seleccion.items():
+        cliente = ClienteFreqtrade(f"http://127.0.0.1:{puerto}", timeout=45)
+        for t in operaciones_cerradas(cliente):
+            t["_bot"] = nombre
+            todas.append(t)
+
+    if not todas:
+        print("\n  Todavia no hay ninguna operacion cerrada.")
+        print(f"  {GRIS}Las posiciones abiertas no cuentan: no tienen resultado "
+              f"hasta que cierran.{FIN}")
+        return 0
+
+    todas.sort(key=lambda t: t.get("close_timestamp") or 0, reverse=True)
+
+    print()
+    print("-" * 78)
+    print(f"  ULTIMAS OPERACIONES CERRADAS")
+    print("-" * 78)
+    print(f"  {GRIS}{'':<2}{'bot':<11}{'par':<11}{'cerrada':<17}"
+          f"{'duracion':>9}{'resultado':>12}{'USDT':>9}  motivo{FIN}")
+
+    for t in todas[:limite]:
+        ganada = (t.get("profit_abs") or 0) > 0
+        color = VERDE if ganada else ROJO
+        marca = f"{VERDE}✔{FIN}" if ganada else f"{ROJO}✘{FIN}"
+
+        cierre = str(t.get("close_date") or "")[:16]
+        minutos = (t.get("trade_duration") or 0)
+        dur = f"{minutos:.0f} min" if minutos < 120 else f"{minutos/60:.1f} h"
+
+        print(f"  {marca} {t['_bot']:<11}{t.get('pair',''):<11}{cierre:<17}"
+              f"{dur:>9}{color}{(t.get('profit_ratio') or 0)*100:>11.2f} %"
+              f"{(t.get('profit_abs') or 0):>9.2f}{FIN}  "
+              f"{GRIS}{t.get('exit_reason','')}{FIN}")
+
+    # --- Resumen: la respuesta a "¿voy ganando o perdiendo?" ---
+    ganadas = [t for t in todas if (t.get("profit_abs") or 0) > 0]
+    perdidas = [t for t in todas if (t.get("profit_abs") or 0) <= 0]
+    total = sum(t.get("profit_abs") or 0 for t in todas)
+
+    bruto_g = sum(t["profit_abs"] for t in ganadas)
+    bruto_p = -sum(t["profit_abs"] for t in perdidas)
+    pf = bruto_g / bruto_p if bruto_p > 0 else (float("inf") if bruto_g else 0)
+
+    print("-" * 78)
+    color_total = VERDE if total > 0 else ROJO
+    print(f"  {len(todas)} operaciones cerradas  ·  "
+          f"{VERDE}{len(ganadas)} ganadas{FIN} / {ROJO}{len(perdidas)} perdidas{FIN}  ·  "
+          f"win rate {len(ganadas)/len(todas)*100:.1f} %")
+    print(f"  resultado acumulado: {color_total}{total:+.2f} USDT{FIN}"
+          f"   ·   profit factor: {pf:.2f}")
+    print()
+    if pf < 1:
+        print(f"  {GRIS}Profit factor por debajo de 1: se pierde mas de lo que se gana.")
+        print(f"  Recuerda que cada operacion completa paga 0.30 % en comisiones,")
+        print(f"  asi que hace falta superar eso solo para quedar en tablas.{FIN}")
+    if len(todas) < 30:
+        print(f"  {AMARILLO}Con {len(todas)} operaciones cualquier conclusion es ruido.")
+        print(f"  Por debajo de ~30 el resultado dice mas de la suerte que del sistema.{FIN}")
+    return 0
+
+
 def estado_latido(vivo: bool, silencio: float | None) -> str:
     """Sufijo que describe el latido, incluido el caso de arranque en curso."""
     if silencio is None:
@@ -162,6 +241,10 @@ def main() -> int:
                    help="ver solo uno, con el desglose de senales por par")
     p.add_argument("--senales", action="store_true",
                    help="incluir el desglose de senales para todos")
+    p.add_argument("--operaciones", "-o", action="store_true",
+                   help="listar las operaciones cerradas con su resultado")
+    p.add_argument("--limite", type=int, default=25,
+                   help="cuantas operaciones listar (por defecto 25)")
     args = p.parse_args()
 
     seleccion = {args.bot: BOTS[args.bot]} if args.bot else BOTS
@@ -189,6 +272,9 @@ def main() -> int:
               f"({(equity - inicial) / inicial * 100:+.2f} %)")
         print(f"  posiciones abiertas  : {sum(r['abiertas'] for r in resultados)}")
         print(f"  operaciones cerradas : {sum(r['cerradas'] for r in resultados)}")
+
+    if args.operaciones:
+        mostrar_operaciones(seleccion, args.limite)
 
     print()
     print(f"  {GRIS}Riesgo por operacion {RIESGO_POR_OPERACION:.1%} · "
