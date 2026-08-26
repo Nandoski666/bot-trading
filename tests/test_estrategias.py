@@ -64,6 +64,24 @@ def descubrir() -> list[type]:
 ESTRATEGIAS = descubrir()
 IDS = [c.__name__ for c in ESTRATEGIAS]
 
+# Las estrategias de FreqAI no se pueden ejercitar con dataframes sinteticos:
+# `populate_indicators` llama a `self.freqai.start()`, que necesita modelos
+# entrenados, datos de varios timeframes y el andamiaje completo del modulo.
+#
+# NO quedan sin cubrir: los tests de riesgo, hipotesis y AST se les aplican
+# igual —son los que importan—, y `tests/test_aprendizaje.py` cubre lo suyo con
+# analisis estatico y con el backtest real.
+def _necesita_freqai(clase) -> bool:
+    import inspect
+    try:
+        return "freqai" in inspect.getsource(clase.populate_indicators)
+    except (OSError, TypeError):
+        return False
+
+
+SIN_FREQAI = [c for c in ESTRATEGIAS if not _necesita_freqai(c)]
+IDS_SIN_FREQAI = [c.__name__ for c in SIN_FREQAI]
+
 
 def test_se_descubrieron_las_estrategias():
     """Si esto falla, los tests parametrizados de abajo no prueban nada."""
@@ -187,9 +205,21 @@ def test_sin_desplazamientos_negativos(estrategia):
 
     archivo = DIR_ESTRATEGIAS / f"{estrategia.__module__}.py"
     arbol = ast.parse(archivo.read_text(encoding="utf-8"), filename=str(archivo))
+    # Unica excepcion permitida: la etiqueta de entrenamiento de FreqAI. Es el
+    # retorno FUTURO por definicion —es lo que el modelo aprende a predecir— y
+    # FreqAI garantiza que ninguna fila cuyo futuro no haya ocurrido entre en el
+    # entrenamiento. La excepcion esta acotada a ese metodo y verificada en
+    # tests/test_aprendizaje.py.
+    permitidos = set()
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.FunctionDef) and nodo.name == "set_freqai_targets":
+            permitidos.update(range(nodo.lineno, (nodo.end_lineno or nodo.lineno) + 1))
+
     for nodo in ast.walk(arbol):
         if not (isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Attribute)
                 and nodo.func.attr == "shift"):
+            continue
+        if nodo.lineno in permitidos:
             continue
         for arg in list(nodo.args) + [k.value for k in nodo.keywords
                                       if k.arg in (None, "periods")]:
@@ -226,7 +256,7 @@ def test_sin_relleno_hacia_atras(estrategia):
                         )
 
 
-@pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
+@pytest.mark.parametrize("estrategia", SIN_FREQAI, ids=IDS_SIN_FREQAI)
 def test_los_indicadores_no_cambian_al_llegar_el_futuro(estrategia):
     """Truncar la serie no altera los valores ya calculados.
 
@@ -268,7 +298,7 @@ def test_los_indicadores_no_cambian_al_llegar_el_futuro(estrategia):
 # Las senales son coherentes
 # ===========================================================================
 
-@pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
+@pytest.mark.parametrize("estrategia", SIN_FREQAI, ids=IDS_SIN_FREQAI)
 def test_entrada_y_salida_nunca_coinciden(estrategia):
     from conftest import serie_con_cruce_alcista
 
@@ -282,7 +312,7 @@ def test_entrada_y_salida_nunca_coinciden(estrategia):
         assert ambas.empty, f"{estrategia.__name__}: {len(ambas)} velas con ambas senales"
 
 
-@pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
+@pytest.mark.parametrize("estrategia", SIN_FREQAI, ids=IDS_SIN_FREQAI)
 def test_no_opera_sin_volumen(estrategia):
     """Volumen 0 es un hueco de datos, no un mercado."""
     from conftest import serie_con_cruce_alcista

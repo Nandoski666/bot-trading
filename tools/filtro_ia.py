@@ -105,6 +105,11 @@ class VeredictoIA(BaseModel):
         default_factory=list,
         description="Hechos concretos observados que preocupan. Lista vacia si "
                     "no hay ninguno.")
+    eventos_encontrados: list[str] = Field(
+        default_factory=list,
+        description="Eventos de mercado relevantes hallados al buscar noticias, "
+                    "con fecha. Lista vacia si no se encontro nada digno de "
+                    "mencion. No incluir especulacion ni predicciones de precio.")
 
 
 INSTRUCCIONES = """Eres un filtro de contexto de un sistema de trading automatico de \
@@ -120,6 +125,19 @@ Lo que NO haces, y es importante:
 - No optimizas nada. No propones cambiar parametros ni reglas.
 
 Solo puedes RESTAR operaciones, nunca anadirlas.
+
+Tienes acceso a busqueda web. Usala para comprobar si hay algun evento de las
+ultimas 24 horas que un indicador tecnico no pueda ver: una decision de tipos de
+interes, un fallo judicial o regulatorio importante, el hackeo de un exchange
+grande, la quiebra de un actor relevante, o una liquidacion masiva en curso.
+
+Que buscar y que ignorar:
+- SI importa: hechos verificables con fecha, de fuentes serias, ocurridos ya.
+- NO importa: predicciones de analistas, precios objetivo, "expertos dicen que
+  subira", contenido promocional, o noticias de hace mas de una semana.
+
+Si no encuentras nada relevante, dilo y deja operar. La ausencia de noticias es
+el estado normal del mercado, no una anomalia.
 
 Recomienda pausar unicamente ante algo concreto y observable, por ejemplo:
 - volatilidad muy fuera de lo normal en varios pares a la vez
@@ -206,7 +224,10 @@ def consultar(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
     except ImportError:
         return None, "falta el paquete anthropic (uv pip install anthropic)"
 
-    pregunta = f"""Estado del mercado (ultimas 200 velas de 1h):
+    pregunta = f"""Busca primero si hay algun evento de mercado relevante en las
+ultimas 24 horas. Luego valora el contexto con estos datos.
+
+Estado del mercado (ultimas 200 velas de 1h):
 {mercado}
 
 Estado de los bots (cada uno con 1.000 USDT simulados):
@@ -218,11 +239,22 @@ Momento actual: {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC
 
     try:
         cliente = anthropic.Anthropic()
-        respuesta = cliente.with_options(timeout=90.0).messages.parse(
+        respuesta = cliente.with_options(timeout=180.0).messages.parse(
             model=MODELO,
-            max_tokens=4096,
+            max_tokens=8192,
             system=INSTRUCCIONES,
             thinking={"type": "adaptive"},
+            # Busqueda web del lado del servidor: el modelo consulta noticias
+            # recientes por su cuenta. Es la mitad del filtro que un indicador
+            # no puede cubrir — un indicador ve el precio, no por que se movio.
+            #
+            # max_uses limita el gasto: este filtro corre cada hora, 24 veces al
+            # dia. Sin tope, una consulta curiosa multiplica la factura.
+            tools=[{
+                "type": "web_search_20260209",
+                "name": "web_search",
+                "max_uses": 4,
+            }],
             messages=[{"role": "user", "content": pregunta}],
             output_format=VeredictoIA,
         )
@@ -250,6 +282,8 @@ def escribir_decision(veredicto: VeredictoIA | None, error: str | None) -> dict:
         "motivo": (f"filtro no disponible ({error}); se deja operar"
                    if veredicto is None else veredicto.motivo),
         "senales_de_alerta": [] if veredicto is None else veredicto.senales_de_alerta,
+        "eventos_encontrados": ([] if veredicto is None
+                                else veredicto.eventos_encontrados),
         "error": error,
     }
     DECISION.parent.mkdir(parents=True, exist_ok=True)
@@ -294,7 +328,9 @@ def evaluar(datadir: Path, pares: list[str], verboso: bool = True) -> dict:
           f"(confianza: {decision['confianza']})")
     print(f"  {decision['motivo']}")
     for s in decision["senales_de_alerta"]:
-        print(f"  · {s}")
+        print(f"  ! {s}")
+    for e in decision.get("eventos_encontrados", []):
+        print(f"  · {e}")
     if error:
         print(f"  (el filtro no pudo consultarse: {error})", file=sys.stderr)
     return decision

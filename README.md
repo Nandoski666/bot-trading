@@ -204,6 +204,25 @@ de horas, así que la maquinaria se verifica en 48 h en vez de en un mes.
 pierden casi toda la cuenta simulada. El detalle y el porqué están en
 [`RAPIDAS.md`](user_data/backtest_results/comparativa/RAPIDAS.md).
 
+### Aprendizaje automático (FreqAI)
+
+`AprendizModelo` entrena un modelo LightGBM sobre ventanas móviles de 30 días,
+reentrenando cada 7. Predice el retorno de la próxima hora y solo entra cuando
+la expectativa supera los costes.
+
+```bash
+python -m freqtrade backtesting --strategy AprendizModelo     --freqaimodel LightGBMRegressor --config user_data/config.dryrun.json     --datadir user_data/data --timerange 20260601-20260815 --fee 0.0015
+```
+
+**Qué aprende y qué no.** No aprende de sus propias operaciones — eso sería
+imposible de validar y sería sobreajuste puro. Aprende de la estructura del
+mercado sobre una ventana que se desplaza, descartando lo viejo. Por eso es
+backtesteable: en cada punto del pasado el modelo solo usó datos anteriores.
+
+`do_predict == 1` es la condición que impide operar cuando el mercado entra en
+un régimen que el modelo no vio: extrapolar fuera del dominio de entrenamiento
+no es predecir, es inventar con decimales.
+
 ### Filtro de contexto con IA
 
 ```bash
@@ -211,8 +230,8 @@ python tools/filtro_ia.py --explicar
 ```
 
 Cada hora, un contenedor pregunta a Claude si hay alguna razón de **contexto**
-para dejar de abrir posiciones, y escribe su veredicto en
-`user_data/decision_ia.json`. Las estrategias lo consultan antes de confirmar
+para dejar de abrir posiciones — **buscando noticias en la web** por su cuenta —
+y escribe su veredicto en `user_data/decision_ia.json`. Las estrategias lo consultan antes de confirmar
 una entrada.
 
 Tres reglas que lo mantienen dentro de lo auditable:
@@ -305,8 +324,21 @@ para que pase.**
 
 ---
 
+## Llevarlo a una máquina 24/7
+
+```bash
+./tools/preparar_despliegue.sh
+```
+
+Verifica Docker, RAM, `.env`, datos y —lo que más importa— el **arranque
+automático**. Ese es el motivo de mover el sistema: si al reiniciar la máquina
+los bots no vuelven solos, no habrás resuelto nada.
+
+Guía completa: [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md)
+
 ## Documentación
 
+- [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) — mover el sistema a un equipo 24/7
 - [`docs/STRATEGY.md`](docs/STRATEGY.md) — las reglas en español, sin código
 - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — qué hacer cuando algo falla
 - [`docs/JOURNAL.md`](docs/JOURNAL.md) — bitácora semanal (la llena el humano)
@@ -352,7 +384,8 @@ Si nada responde: cierra las posiciones a mano en Binance. Ver
 │   ├── watchdog.py             # heartbeat, límites, resumen diario
 │   ├── estado.py               # qué está viendo el bot ahora mismo
 │   ├── exportar_db.py          # saca el SQLite del volumen Docker al host
-│   ├── filtro_ia.py            # filtro de contexto con Claude (solo veta)
+│   ├── filtro_ia.py            # filtro de contexto con Claude + noticias
+│   ├── preparar_despliegue.sh  # verifica que una máquina está lista
 │   ├── comparar_estrategias.py # tabla comparable de las cinco
 │   ├── setup_telegram.py       # asistente de configuración de Telegram
 │   └── entrada_journal.py      # entrada semanal del journal con datos reales

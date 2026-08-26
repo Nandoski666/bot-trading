@@ -146,7 +146,19 @@ def test_codigo_sin_desplazamientos_negativos():
     for archivo in raiz.glob("*.py"):
         arbol = ast.parse(archivo.read_text(encoding="utf-8"), filename=str(archivo))
         revisados += 1
+
+        # Unica excepcion: la etiqueta de entrenamiento de FreqAI, que ES el
+        # retorno futuro por definicion. Acotada a ese metodo y verificada
+        # aparte en tests/test_aprendizaje.py.
+        permitidos = set()
         for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.FunctionDef) and nodo.name == "set_freqai_targets":
+                permitidos.update(range(nodo.lineno,
+                                        (nodo.end_lineno or nodo.lineno) + 1))
+
+        for nodo in ast.walk(arbol):
+            if getattr(nodo, "lineno", None) in permitidos:
+                continue
             if not (isinstance(nodo, ast.Call)
                     and isinstance(nodo.func, ast.Attribute)
                     and nodo.func.attr == "shift"):
