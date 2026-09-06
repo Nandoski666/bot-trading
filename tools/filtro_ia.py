@@ -70,7 +70,17 @@ DECISION = RAIZ / "user_data" / "decision_ia.json"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from api_freqtrade import ClienteFreqtrade, ErrorAPI, cargar_env  # noqa: E402
 
+# --- Proveedores ------------------------------------------------------------
+# Dos opciones, y se elige sola segun que clave haya en .env:
+#
+#   ANTHROPIC_API_KEY  ->  Claude Opus 5.       Mejor razonamiento, de pago.
+#   GROQ_API_KEY       ->  Groq compound.       Gratis, muy rapido, mas simple.
+#
+# Las dos soportan lo que el filtro necesita: busqueda web integrada y salida
+# estructurada con esquema JSON. Si hay las dos claves gana Anthropic; si no hay
+# ninguna, el filtro no bloquea nada.
 MODELO = "claude-opus-5"
+MODELO_GROQ = "groq/compound"
 
 # Cuanto vale una decision antes de considerarse vieja. Si el filtro lleva mas
 # de esto sin actualizarse, las estrategias lo ignoran: una opinion de ayer
@@ -213,18 +223,18 @@ def contexto_bots() -> str:
 # Consulta
 # ---------------------------------------------------------------------------
 
-def consultar(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
-    """Devuelve (veredicto, error). Nunca lanza: un fallo aqui no puede parar el bot."""
+def proveedor_disponible() -> str | None:
+    """Que proveedor se va a usar, segun las claves presentes."""
     cargar_env()
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return None, "sin ANTHROPIC_API_KEY"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if os.environ.get("GROQ_API_KEY"):
+        return "groq"
+    return None
 
-    try:
-        import anthropic
-    except ImportError:
-        return None, "falta el paquete anthropic (uv pip install anthropic)"
 
-    pregunta = f"""Busca primero si hay algun evento de mercado relevante en las
+def _pregunta(mercado: str, bots: str) -> str:
+    return f"""Busca primero si hay algun evento de mercado relevante en las
 ultimas 24 horas. Luego valora el contexto con estos datos.
 
 Estado del mercado (ultimas 200 velas de 1h):
@@ -237,6 +247,13 @@ Momento actual: {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC
 
 ¿Hay alguna razon de contexto para dejar de abrir posiciones nuevas?"""
 
+
+def _consultar_anthropic(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
+    try:
+        import anthropic
+    except ImportError:
+        return None, "falta el paquete anthropic (uv pip install anthropic)"
+
     try:
         cliente = anthropic.Anthropic()
         respuesta = cliente.with_options(timeout=180.0).messages.parse(
@@ -244,26 +261,66 @@ Momento actual: {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC
             max_tokens=8192,
             system=INSTRUCCIONES,
             thinking={"type": "adaptive"},
-            # Busqueda web del lado del servidor: el modelo consulta noticias
-            # recientes por su cuenta. Es la mitad del filtro que un indicador
-            # no puede cubrir — un indicador ve el precio, no por que se movio.
-            #
-            # max_uses limita el gasto: este filtro corre cada hora, 24 veces al
-            # dia. Sin tope, una consulta curiosa multiplica la factura.
-            tools=[{
-                "type": "web_search_20260209",
-                "name": "web_search",
-                "max_uses": 4,
-            }],
-            messages=[{"role": "user", "content": pregunta}],
+            # Busqueda web del lado del servidor. max_uses acota el coste: este
+            # filtro corre varias veces al dia y una consulta curiosa multiplica
+            # la factura.
+            tools=[{"type": "web_search_20260209", "name": "web_search",
+                    "max_uses": 4}],
+            messages=[{"role": "user", "content": _pregunta(mercado, bots)}],
             output_format=VeredictoIA,
         )
         if respuesta.stop_reason == "refusal":
             return None, "el modelo declino responder"
         return respuesta.parsed_output, None
     except Exception as exc:                      # noqa: BLE001
-        # Cualquier fallo de red, cuota o formato: se reporta y se deja operar.
         return None, f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
+def _consultar_groq(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
+    """Consulta a Groq. Gratis y rapido, con busqueda web en los modelos compound.
+
+    Groq usa una API estilo OpenAI, asi que el esquema se pasa como
+    `response_format` con `strict: true` en vez de con el `output_format` del
+    SDK de Anthropic. El resultado es el mismo objeto validado.
+    """
+    try:
+        from groq import Groq
+    except ImportError:
+        return None, "falta el paquete groq (uv pip install groq)"
+
+    esquema = VeredictoIA.model_json_schema()
+    # `strict` exige que el esquema prohiba propiedades extra.
+    esquema["additionalProperties"] = False
+
+    try:
+        cliente = Groq(timeout=120.0)
+        respuesta = cliente.chat.completions.create(
+            model=MODELO_GROQ,
+            messages=[
+                {"role": "system", "content": INSTRUCCIONES},
+                {"role": "user", "content": _pregunta(mercado, bots)},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "veredicto", "schema": esquema,
+                                "strict": True},
+            },
+            max_tokens=4096,
+        )
+        contenido = respuesta.choices[0].message.content
+        return VeredictoIA.model_validate_json(contenido), None
+    except Exception as exc:                      # noqa: BLE001
+        return None, f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
+def consultar(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
+    """Devuelve (veredicto, error). Nunca lanza: un fallo aqui no puede parar el bot."""
+    proveedor = proveedor_disponible()
+    if proveedor is None:
+        return None, "sin ANTHROPIC_API_KEY ni GROQ_API_KEY"
+    if proveedor == "anthropic":
+        return _consultar_anthropic(mercado, bots)
+    return _consultar_groq(mercado, bots)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +331,9 @@ def escribir_decision(veredicto: VeredictoIA | None, error: str | None) -> dict:
     decision = {
         "momento": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "vigencia_horas": VIGENCIA_HORAS,
-        "modelo": MODELO,
+        "proveedor": proveedor_disponible() or "ninguno",
+        "modelo": (MODELO if proveedor_disponible() == "anthropic"
+                   else MODELO_GROQ if proveedor_disponible() == "groq" else "n/a"),
         # Fallo abierto: sin veredicto se opera. Que se caiga un servicio
         # externo no puede dejar el sistema sin gestionar sus posiciones.
         "operar": True if veredicto is None else veredicto.operar,

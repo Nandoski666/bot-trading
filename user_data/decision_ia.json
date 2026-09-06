@@ -1,10 +1,12 @@
 {
-  "momento": "2026-08-26T04:42:30+00:00",
+  "momento": "2026-09-06T02:47:27+00:00",
   "vigencia_horas": 6,
-  "modelo": "claude-opus-5",
+  "proveedor": "ninguno",
+  "modelo": "n/a",
   "operar": true,
   "confianza": "n/a",
-  "motivo": "filtro no disponible (sin ANTHROPIC_API_KEY); se deja operar",
+  "motivo": "filtro no disponible (sin ANTHROPIC_API_KEY ni GROQ_API_KEY); se deja operar",
   "senales_de_alerta": [],
-  "error": "sin ANTHROPIC_API_KEY"
+  "eventos_encontrados": [],
+  "error": "sin ANTHROPIC_API_KEY ni GROQ_API_KEY"
 }

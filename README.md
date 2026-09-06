@@ -226,8 +226,19 @@ no es predecir, es inventar con decimales.
 ### Filtro de contexto con IA
 
 ```bash
-python tools/filtro_ia.py --explicar
+python tools/pegar_clave_ia.py     # meter la clave (Anthropic o Groq)
+python tools/filtro_ia.py          # una evaluación ahora
 ```
+
+Funciona con **dos proveedores**, y elige solo según la clave que haya en `.env`:
+
+| | Coste | Notas |
+|---|---|---|
+| **Anthropic** (`sk-ant-…`) | de pago | mejor razonamiento |
+| **Groq** (`gsk_…`) | **gratis** | muy rápido, modelos `compound` |
+
+Los dos soportan lo que el filtro necesita: búsqueda web y salida estructurada
+con esquema estricto. Con las dos claves presentes gana Anthropic.
 
 Cada hora, un contenedor pregunta a Claude si hay alguna razón de **contexto**
 para dejar de abrir posiciones — **buscando noticias en la web** por su cuenta —

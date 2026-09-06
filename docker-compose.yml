@@ -311,7 +311,8 @@ services:
   # en backtest — si afectara al backtest, ningun resultado historico volveria a
   # ser reproducible.
   #
-  # Sin ANTHROPIC_API_KEY no bloquea nada: falla abierto a proposito.
+  # Funciona con Anthropic (de pago) o con Groq (gratis): elige segun que clave
+  # haya en .env. Sin ninguna de las dos no bloquea nada — falla abierto.
   # ---------------------------------------------------------------------------
   filtro-ia:
     image: freqtradeorg/freqtrade:stable
@@ -327,7 +328,7 @@ services:
       - PYTHONUNBUFFERED=1
     entrypoint: ["sh", "-c"]
     command:
-      - "pip install --quiet --no-warn-script-location anthropic pydantic >/dev/null 2>&1;
+      - "pip install --quiet --no-warn-script-location anthropic groq pydantic >/dev/null 2>&1;
          exec python -u /freqtrade/tools/filtro_ia.py --intervalo 3600"
 
 

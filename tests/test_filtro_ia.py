@@ -185,3 +185,78 @@ def test_el_veto_se_aplica_en_confirm_trade_entry(tmp_path, monkeypatch):
 def test_el_modelo_configurado_es_el_esperado():
     import filtro_ia
     assert filtro_ia.MODELO == "claude-opus-5"
+
+
+# ===========================================================================
+# Dos proveedores, mismas garantias
+# ===========================================================================
+
+def test_detecta_el_proveedor_por_la_forma_de_la_clave():
+    """sk-ant- es Anthropic, gsk_ es Groq. Nada mas se acepta.
+
+    Sin esta validacion, una cadena cualquiera acabaria en .env y el fallo
+    aparecerira horas despues, en la primera consulta, con un error de API
+    confuso.
+    """
+    import pegar_clave_ia as pk
+
+    assert pk.detectar("sk-ant-" + "a" * 40) == "anthropic"
+    assert pk.detectar("gsk_" + "B" * 40) == "groq"
+    assert pk.detectar("no-es-una-clave") is None
+    assert pk.detectar("") is None
+    assert pk.detectar("sk-ant-corta") is None
+
+
+def test_anthropic_gana_si_estan_las_dos_claves(monkeypatch):
+    """Con ambas configuradas se usa Anthropic: mejor razonamiento.
+
+    Que el orden sea explicito importa — si dependiera del orden del diccionario
+    o del .env, el proveedor cambiaria sin que nadie lo hubiera decidido.
+    """
+    import filtro_ia
+
+    monkeypatch.setattr(filtro_ia, "cargar_env", lambda *a, **k: {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_x")
+    assert filtro_ia.proveedor_disponible() == "anthropic"
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    assert filtro_ia.proveedor_disponible() == "groq"
+
+    monkeypatch.delenv("GROQ_API_KEY")
+    assert filtro_ia.proveedor_disponible() is None
+
+
+def test_sin_ninguna_clave_se_opera(tmp_path, monkeypatch):
+    """La garantia de fallo abierto vale para los dos proveedores."""
+    import filtro_ia
+
+    monkeypatch.setattr(filtro_ia, "cargar_env", lambda *a, **k: {})
+    monkeypatch.setattr(filtro_ia, "DECISION", tmp_path / "decision_ia.json")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    veredicto, error = filtro_ia.consultar("mercado", "bots")
+    assert veredicto is None
+    assert "GROQ_API_KEY" in error and "ANTHROPIC_API_KEY" in error
+
+    decision = filtro_ia.escribir_decision(veredicto, error)
+    assert decision["operar"] is True
+
+
+def test_los_dos_proveedores_piden_salida_estructurada():
+    """Ni Anthropic ni Groq deben devolver texto libre.
+
+    El veredicto alimenta una decision automatica. Parsear prosa para decidir si
+    se opera es exactamente la fragilidad que este proyecto evita en todo lo
+    demas — y con dos proveedores distintos la tentacion de aflojar en uno de
+    los dos es mayor.
+    """
+    import inspect
+
+    import filtro_ia
+
+    fuente = inspect.getsource(filtro_ia)
+    assert "output_format=VeredictoIA" in fuente, "Anthropic sin esquema"
+    assert '"type": "json_schema"' in fuente, "Groq sin esquema"
+    assert '"strict": True' in fuente, "Groq sin modo estricto"
