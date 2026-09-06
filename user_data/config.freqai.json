@@ -1,0 +1,60 @@
+{
+    "//_1": "Configuracion de FreqAI. Va en un archivo APARTE y no en config.dryrun.json a proposito: Freqtrade valida include_timeframes contra el timeframe de la estrategia, asi que tener este bloque en el config principal impide correr cualquier estrategia con velas mayores que 5m — TendenciaLarga (1d) fallaba con 'Main timeframe of 1d must be smaller or equal to FreqAI include_timeframes'.",
+    "//_2": "Uso:  freqtrade backtesting --config user_data/config.dryrun.json --config user_data/config.freqai.json --strategy AprendizModelo --freqaimodel LightGBMRegressor",
+    "freqai": {
+        "//_1": "Configuracion del modelo de aprendizaje automatico (FreqAI).",
+        "//_2": "Solo la usa AprendizModelo; las demas estrategias la ignoran.",
+        "enabled": true,
+        "identifier": "aprendiz-v1",
+        "//_entrenamiento": "30 dias de datos para entrenar, reentrenando cada 7. Ventana corta a proposito: el mercado cambia, y un modelo entrenado con dos anos aprende un regimen que ya no existe.",
+        "train_period_days": 30,
+        "backtest_period_days": 7,
+        "expiration_hours": 24,
+        "//_prediccion": "purge_old_models limita cuantos modelos se guardan; sin esto el disco se llena en semanas.",
+        "purge_old_models": 4,
+        "save_backtest_models": false,
+        "fit_live_predictions_candles": 300,
+        "feature_parameters": {
+            "//_periodos": "El mismo indicador calculado a 10, 20 y 50 velas. El modelo decide cual importa; no hay que acertarlo.",
+            "indicator_periods_candles": [
+                10,
+                20,
+                50
+            ],
+            "include_timeframes": [
+                "5m",
+                "15m",
+                "1h"
+            ],
+            "//_correlacionados": "Pares de referencia que el modelo ve ADEMAS del que opera. BTC y ETH marcan el tono de todo el mercado cripto: saber que hace BTC mientras se decide sobre SOL es contexto real que una regla fija sobre un solo par no puede usar.",
+            "include_corr_pairlist": [
+                "BTC/USDT",
+                "ETH/USDT"
+            ],
+            "//_timeframes": "Tres marcos temporales: el modelo ve el detalle y el contexto a la vez, algo que una regla fija no puede.",
+            "label_period_candles": 12,
+            "//_etiqueta": "12 velas de 5m = 1 hora. Es lo que el modelo intenta predecir: el retorno de la proxima hora.",
+            "include_shifted_candles": 2,
+            "DI_threshold": 0.9,
+            "//_DI": "Umbral de disimilitud: cuando los datos actuales se parecen poco a los del entrenamiento, do_predict pasa a 0 y no se opera. Un modelo extrapolando fuera de su dominio inventa.",
+            "weight_factor": 0.9,
+            "principal_component_analysis": false,
+            "use_SVM_to_remove_outliers": true,
+            "stratify_training_data": 0,
+            "indicator_max_period_candles": 50,
+            "plot_feature_importances": 0
+        },
+        "data_split_parameters": {
+            "test_size": 0.2,
+            "shuffle": false
+        },
+        "model_training_parameters": {
+            "n_estimators": 200,
+            "learning_rate": 0.05,
+            "num_leaves": 31,
+            "verbosity": -1
+        },
+        "//_aviso_secciones": "NO poner claves de comentario (//_) dentro de data_split_parameters ni de model_training_parameters: se pasan como kwargs a scikit-learn y al modelo, y cualquier clave desconocida aborta el entrenamiento con TypeError. El sintoma es enganoso: el backtest termina sin error visible y con 0 operaciones, porque cada entrenamiento falla en silencio.",
+        "//_shuffle": "data_split_parameters.shuffle debe ser false: barajar una serie temporal mezcla futuro y pasado dentro del entrenamiento y el modelo aprende a hacer trampa."
+    }
+}

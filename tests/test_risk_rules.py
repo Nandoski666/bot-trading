@@ -561,3 +561,71 @@ def test_el_detector_de_parametros_funciona_de_verdad():
         "el detector de parametros no encuentra un parametro que existe: los "
         "tests que dependen de el no estan comprobando nada"
     )
+
+
+# ===========================================================================
+# El ancho del stop no altera el riesgo
+# ===========================================================================
+
+@pytest.mark.parametrize("multiplicador", [1.0, 2.0, 3.0, 4.0, 6.0])
+def test_el_riesgo_por_operacion_no_depende_del_ancho_del_stop(estrategia, multiplicador):
+    """Ensanchar el stop NO aumenta lo que se pierde. Es la propiedad clave.
+
+    Parece contraintuitivo, y es la razon de que el ancho del stop pueda ser un
+    parametro de estrategia sin tocar las reglas de riesgo:
+
+        tamano = (equity x 0.5 %) / distancia_al_stop
+
+    Si la distancia se duplica, el tamano se divide entre dos, y la perdida al
+    tocar el stop sigue siendo el 0.5 % del equity. Lo unico que cambia es
+    cuantas veces se toca — menos, con un stop mas ancho — y cuanto capital se
+    despliega — menos tambien.
+
+    Sin este test, permitir que una estrategia mueva el multiplicador seria
+    abrir la puerta a que alguien lo suba "para que no le salten los stops" y
+    creyera que no cambia nada. Este test es lo que demuestra que efectivamente
+    no cambia el riesgo... siempre que el dimensionamiento siga siendo el que es.
+    """
+    equity, precio, atr = 10_000.0, 1000.0, 20.0
+    df = construir_ohlcv_atr(300, precio=precio, rango=atr)
+    s = estrategia_con_datos(estrategia, estrategia.populate_indicators(df, {"pair": "BTC/USDT"}),
+                       equity=equity)
+    s.atr_multiplicador_stop = multiplicador
+
+    stake = s.custom_stake_amount(
+        pair="BTC/USDT", current_time=AHORA, current_rate=precio,
+        proposed_stake=1000.0, min_stake=1.0, max_stake=equity,
+        leverage=1.0, entry_tag=None, side="long")
+    assert stake > 0
+
+    atr_real = s.dp._df["atr"].iloc[-1]
+    perdida = (stake / precio) * (multiplicador * atr_real)
+    riesgo = perdida / equity
+
+    assert riesgo <= R.RIESGO_POR_OPERACION + 1e-9, (
+        f"con stop de {multiplicador} x ATR el riesgo sube a {riesgo:.4%}")
+
+
+def test_un_stop_mas_ancho_reduce_el_capital_desplegado(estrategia):
+    """La contrapartida de un stop ancho: posiciones mas pequenas.
+
+    Es el compromiso real. Un stop del doble de ancho salta la mitad de veces,
+    pero despliega la mitad de capital — y por tanto captura la mitad del
+    movimiento cuando acierta.
+    """
+    equity, precio, atr = 10_000.0, 1000.0, 20.0
+    tamanos = []
+    for mult in (2.0, 4.0):
+        df = construir_ohlcv_atr(300, precio=precio, rango=atr)
+        s = estrategia_con_datos(estrategia,
+                                 estrategia.populate_indicators(df, {"pair": "BTC/USDT"}),
+                           equity=equity)
+        s.atr_multiplicador_stop = mult
+        tamanos.append(s.custom_stake_amount(
+            pair="BTC/USDT", current_time=AHORA, current_rate=precio,
+            proposed_stake=1000.0, min_stake=1.0, max_stake=equity,
+            leverage=1.0, entry_tag=None, side="long"))
+
+    assert tamanos[1] == pytest.approx(tamanos[0] / 2, rel=0.02), (
+        f"al doblar el ancho del stop el tamano deberia partirse por dos: "
+        f"{tamanos[0]:.2f} -> {tamanos[1]:.2f}")

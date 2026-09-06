@@ -71,6 +71,40 @@ class EstrategiaBase(IStrategy):
 
     _aviso_max_trades_emitido = False
 
+    # --- Ajuste de salida (NO es riesgo) -------------------------------------
+    # Distancia del trailing y umbral de activacion, en unidades de ATR.
+    #
+    # Se permite que una estrategia los cambie, y las tres cifras de RIESGO no:
+    # el 0.5 % por operacion, el stop inicial de 2 x ATR y el limite de 3
+    # posiciones siguen siendo intocables, porque son los que determinan cuanto
+    # se pierde cuando algo sale mal.
+    #
+    # El trailing es otra cosa: decide CUANDO se recoge un beneficio, no cuanto
+    # se arriesga. Y su valor correcto depende del timeframe. Un trailing de
+    # 1 x ATR en velas de 5 minutos recoge rapido; el mismo 1 x ATR en velas
+    # diarias cierra en el primer retroceso normal y hace imposible seguir una
+    # tendencia. Obligar a los dos a usar el mismo numero no es prudencia, es
+    # confundir dos parametros distintos.
+    atr_activacion_trailing: float = ATR_ACTIVACION_TRAILING
+    atr_distancia_trailing: float = ATR_DISTANCIA_TRAILING
+
+    # --- Ancho del stop inicial (tampoco es riesgo, y conviene entenderlo) ----
+    # Parece que ensanchar el stop aumenta el riesgo. No lo hace, y la razon es
+    # el propio dimensionamiento:
+    #
+    #     tamano = (equity x 0.5 %) / distancia_al_stop
+    #
+    # Si la distancia se duplica, el tamano se divide entre dos. La perdida al
+    # tocar el stop es la MISMA — el 0.5 % del equity — por construccion.
+    #
+    # Lo que si cambia es la frecuencia: un stop mas ancho se toca menos veces
+    # por ruido, a cambio de una posicion menor. Es un compromiso de estrategia
+    # entre "cuantas veces me sacan" y "cuanto capital despliego", no una
+    # decision de riesgo.
+    #
+    # `test_el_riesgo_por_operacion_no_depende_del_ancho_del_stop` lo verifica.
+    atr_multiplicador_stop: float = ATR_MULTIPLICADOR_STOP
+
     # --- Hipotesis de mercado -----------------------------------------------
     # Cada estrategia hija DEBE declarar que cree que hace el mercado y por que
     # sus senales lo capturan. No es decoracion: el plan prohibe anadir
@@ -245,7 +279,7 @@ class EstrategiaBase(IStrategy):
             return 0.0
 
         atr = float(vela["atr"])
-        distancia_stop = ATR_MULTIPLICADOR_STOP * atr
+        distancia_stop = self.atr_multiplicador_stop * atr
 
         if current_rate <= 0 or distancia_stop <= 0:
             return 0.0
@@ -323,7 +357,7 @@ class EstrategiaBase(IStrategy):
             return None
 
         # --- Fase 1: stop inicial ------------------------------------------
-        stop_precio = trade.open_rate - ATR_MULTIPLICADOR_STOP * atr
+        stop_precio = trade.open_rate - self.atr_multiplicador_stop * atr
 
         # --- Fase 2: trailing ----------------------------------------------
         # trade.max_rate es el maximo que alcanzo el precio desde la apertura
@@ -332,8 +366,8 @@ class EstrategiaBase(IStrategy):
         maximo = trade.max_rate or trade.open_rate
         recorrido = maximo - trade.open_rate
 
-        if recorrido >= ATR_ACTIVACION_TRAILING * atr:
-            stop_trailing = maximo - ATR_DISTANCIA_TRAILING * atr
+        if recorrido >= self.atr_activacion_trailing * atr:
+            stop_trailing = maximo - self.atr_distancia_trailing * atr
             stop_precio = max(stop_precio, stop_trailing)
 
         # Freqtrade espera el stop como ratio relativo al precio actual:
@@ -450,6 +484,26 @@ class EstrategiaBase(IStrategy):
                         pair, motivo)
             return False
 
+        # AVISO SOBRE `freqtrade lookahead-analysis`
+        # ------------------------------------------
+        # Esta consulta es la unica fuente de estado GLOBAL en toda la cadena de
+        # decision: no sale del dataframe, sale de la cartera.
+        #
+        # Eso hace que lookahead-analysis de FALSOS POSITIVOS en estrategias que
+        # topan a menudo con el limite. La herramienta trunca los datos, repite
+        # el backtest y compara las senales; al cambiar el numero de posiciones
+        # abiertas en cada pasada, unas entradas se rechazan y otras no, y lo
+        # interpreta como sesgo.
+        #
+        # Comprobado en TendenciaMedia (4h, 710 operaciones): reportaba
+        # "has_bias: Yes, 6 entradas sesgadas" con `biased_indicators` VACIO.
+        # Quitando solo esta comprobacion, el mismo analisis da "No, 0 sesgadas".
+        # TendenciaLarga (1d, 97 operaciones) nunca lo dispara porque el limite
+        # casi nunca la afecta.
+        #
+        # Como distinguir un falso positivo de un sesgo real: si
+        # `biased_indicators` esta vacio y la estrategia topa con el limite de
+        # posiciones, es esto. Si algun indicador aparece listado, es real.
         abiertas = Trade.get_open_trade_count()
         if abiertas >= MAX_POSICIONES_SIMULTANEAS:
             logger.warning(

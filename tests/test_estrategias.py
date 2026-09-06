@@ -356,7 +356,7 @@ def test_el_config_no_fija_el_timeframe():
 
 @pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
 def test_cada_estrategia_declara_su_timeframe(estrategia):
-    assert estrategia.timeframe in ("5m", "15m", "1h", "4h"), (
+    assert estrategia.timeframe in ("5m", "15m", "1h", "4h", "1d"), (
         f"{estrategia.__name__} usa un timeframe inesperado: {estrategia.timeframe}")
 
 
@@ -365,3 +365,41 @@ def test_las_variantes_rapidas_son_de_cinco_minutos():
     assert len(rapidas) == 5, f"se encontraron {len(rapidas)} variantes rapidas"
     for c in rapidas:
         assert c.timeframe == "5m", f"{c.__name__} no esta en 5m sino en {c.timeframe}"
+
+
+# ===========================================================================
+# El trailing se puede ajustar; el riesgo no
+# ===========================================================================
+
+@pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
+def test_el_stop_inicial_es_intocable(estrategia):
+    """Una estrategia puede ajustar el trailing, nunca el stop inicial.
+
+    La distincion es la que separa "cuando recojo beneficio" de "cuanto pierdo
+    si me equivoco". Lo primero depende del timeframe y es una decision de
+    estrategia; lo segundo es la regla de riesgo del plan y no se negocia.
+
+    El stop inicial (2 x ATR) determina ademas el tamano de la posicion, asi
+    que tocarlo cambia el riesgo por operacion aunque no lo parezca.
+    """
+    import inspect
+
+    fuente = inspect.getsource(sys.modules[estrategia.__module__])
+    assert "ATR_MULTIPLICADOR_STOP =" not in fuente, (
+        f"{estrategia.__name__} redefine el multiplicador del stop inicial")
+    assert "RIESGO_POR_OPERACION =" not in fuente, (
+        f"{estrategia.__name__} redefine el riesgo por operacion")
+    assert "MAX_POSICIONES_SIMULTANEAS =" not in fuente, (
+        f"{estrategia.__name__} redefine el limite de posiciones")
+
+
+@pytest.mark.parametrize("estrategia", ESTRATEGIAS, ids=IDS)
+def test_el_trailing_activa_mas_lejos_de_lo_que_arrastra(estrategia):
+    """Si el trailing arrastrara mas lejos de lo que activa, cerraria al armarse.
+
+    El hueco entre activacion y distancia es lo que garantiza que, cuando el
+    trailing entra en juego, el stop ya esta en beneficio.
+    """
+    assert estrategia.atr_activacion_trailing > estrategia.atr_distancia_trailing, (
+        f"{estrategia.__name__}: activacion {estrategia.atr_activacion_trailing} "
+        f"no supera la distancia {estrategia.atr_distancia_trailing}")

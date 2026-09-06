@@ -131,7 +131,10 @@ def test_la_configuracion_no_baraja_la_serie():
     por defecto baraja, y entonces el modelo se entrena con velas posteriores a
     las que evalua. El backtest sale espectacular y en vivo no funciona nada.
     """
-    cfg = json.loads((RAIZ / "user_data" / "config.dryrun.json").read_text())
+    # La configuracion de FreqAI vive en su propio archivo: tenerla en el
+    # principal impide correr estrategias con velas mayores que 5m, porque
+    # Freqtrade valida include_timeframes contra el timeframe de la estrategia.
+    cfg = json.loads((RAIZ / "user_data" / "config.freqai.json").read_text())
     fa = cfg.get("freqai", {})
     assert fa.get("data_split_parameters", {}).get("shuffle") is False, (
         "data_split_parameters.shuffle debe ser false en series temporales")
@@ -146,7 +149,7 @@ def test_las_secciones_que_van_a_sklearn_no_llevan_comentarios():
     y con 0 operaciones — parece que la estrategia no encuentra oportunidades
     cuando en realidad nunca llego a entrenar.
     """
-    cfg = json.loads((RAIZ / "user_data" / "config.dryrun.json").read_text())
+    cfg = json.loads((RAIZ / "user_data" / "config.freqai.json").read_text())
     for seccion in ("data_split_parameters", "model_training_parameters"):
         claves = list(cfg.get("freqai", {}).get(seccion, {}))
         comentarios = [k for k in claves if k.startswith("//")]

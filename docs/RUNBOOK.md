@@ -357,6 +357,49 @@ sin que haya habido suspensión, sigue avisando como fallo.
 
 ---
 
+## Síntoma: `lookahead-analysis` dice `has_bias: Yes`
+
+Antes de asumir lo peor, mira la columna **`biased_indicators`**.
+
+| `biased_indicators` | Qué significa |
+|---|---|
+| **Vacía** | casi seguro un **falso positivo** — ver abajo |
+| **Con algún indicador** | **sesgo real**. No desplegar. |
+
+### El falso positivo conocido
+
+`confirm_trade_entry` comprueba `Trade.get_open_trade_count()` para no abrir una
+cuarta posición. Es la única fuente de estado **global** en toda la cadena de
+decisión: no sale del dataframe, sale de la cartera.
+
+`lookahead-analysis` trunca los datos, repite el backtest y compara las señales.
+Al cambiar el número de posiciones abiertas entre pasadas, unas entradas se
+rechazan y otras no — y lo interpreta como sesgo. No lo es: es estado
+**presente**, no información futura.
+
+Medido en este proyecto: `TendenciaMedia` (4h, 710 operaciones) reportaba
+`has_bias: Yes, 6 entradas sesgadas` con `biased_indicators` vacía. Quitando
+solo esa comprobación, el mismo análisis daba `No, 0 sesgadas`.
+`TendenciaLarga` (1d, 97 operaciones) nunca lo dispara, porque casi nunca topa
+con el límite.
+
+### Cómo confirmarlo
+
+Crea una copia temporal de la estrategia que herede de ella y anule el límite:
+
+```python
+class _PruebaSesgo(TuEstrategia):
+    def confirm_trade_entry(self, pair, order_type, amount, rate,
+                            time_in_force, current_time, entry_tag, side, **kw):
+        return side == "long"
+```
+
+Pasa `lookahead-analysis` sobre esa copia. Si da `No`, era el límite de
+posiciones. **Borra la copia después** — no debe quedar una estrategia sin
+límite de posiciones en el directorio.
+
+---
+
 ## Síntoma: se filtró el token de Telegram
 
 Cuenta como filtración si el token apareció en **cualquier** sitio que no sea
