@@ -62,6 +62,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import requests
 from pydantic import BaseModel, Field
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -80,7 +81,21 @@ from api_freqtrade import ClienteFreqtrade, ErrorAPI, cargar_env  # noqa: E402
 # estructurada con esquema JSON. Si hay las dos claves gana Anthropic; si no hay
 # ninguna, el filtro no bloquea nada.
 MODELO = "claude-opus-5"
-MODELO_GROQ = "groq/compound"
+# Los modelos `compound` de Groq traen busqueda web, pero el tier gratuito los
+# rechaza con 413 en cualquier peticion. Se usa un modelo normal que si soporta
+# esquema JSON, y las noticias se traen aparte de fuentes RSS publicas.
+#
+# Sale mejor asi: las fuentes quedan bajo control y son las mismas en cada
+# consulta, en vez de depender de lo que el modelo decida buscar cada vez.
+MODELO_GROQ = "openai/gpt-oss-120b"
+
+# Titulares de las ultimas horas. RSS publico, sin clave y sin coste.
+FUENTES_NOTICIAS = {
+    "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "Cointelegraph": "https://cointelegraph.com/rss",
+    "Decrypt": "https://decrypt.co/feed",
+}
+TITULARES_POR_FUENTE = 8
 
 # Cuanto vale una decision antes de considerarse vieja. Si el filtro lleva mas
 # de esto sin actualizarse, las estrategias lo ignoran: una opinion de ayer
@@ -136,8 +151,8 @@ Lo que NO haces, y es importante:
 
 Solo puedes RESTAR operaciones, nunca anadirlas.
 
-Tienes acceso a busqueda web. Usala para comprobar si hay algun evento de las
-ultimas 24 horas que un indicador tecnico no pueda ver: una decision de tipos de
+Se te dan titulares recientes de medios cripto. Usalos para detectar si hay
+algun evento de las ultimas 24 horas que un indicador tecnico no pueda ver: una decision de tipos de
 interes, un fallo judicial o regulatorio importante, el hackeo de un exchange
 grande, la quiebra de un actor relevante, o una liquidacion masiva en curso.
 
@@ -201,6 +216,42 @@ def contexto_mercado(datadir: Path, pares: list[str]) -> str:
     return "\n".join(lineas) if lineas else "  (sin datos de mercado)"
 
 
+def contexto_noticias(por_fuente: int = TITULARES_POR_FUENTE) -> str:
+    """Titulares recientes de fuentes cripto publicas.
+
+    Se traen aqui y no se le pide al modelo que busque, por dos razones:
+
+      * el tier gratuito de Groq no admite los modelos con busqueda integrada;
+      * y aunque lo admitiera, controlar las fuentes es mejor: son las mismas en
+        cada consulta, asi que dos evaluaciones seguidas comparan lo mismo. Un
+        modelo buscando por su cuenta trae resultados distintos cada vez y hace
+        imposible saber si cambio el mercado o cambio la busqueda.
+
+    Un fallo de red aqui no es grave: se evalua sin noticias y se dice.
+    """
+    import html
+    import re
+
+    lineas = []
+    for nombre, url in FUENTES_NOTICIAS.items():
+        try:
+            r = requests.get(url, timeout=15,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            if not r.ok:
+                continue
+            crudos = re.findall(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>",
+                                r.text, re.S)
+            # El primer <title> del feed es el nombre del medio, no una noticia.
+            for t in crudos[1:por_fuente + 1]:
+                limpio = html.unescape(re.sub(r"<[^>]+>", "", t)).strip()
+                if limpio:
+                    lineas.append(f"  [{nombre}] {limpio[:150]}")
+        except requests.RequestException:
+            continue
+
+    return "\n".join(lineas) if lineas else "  (no se pudieron leer las noticias)"
+
+
 def contexto_bots() -> str:
     """Como le esta yendo a cada bot ahora mismo."""
     cargar_env()
@@ -233,10 +284,9 @@ def proveedor_disponible() -> str | None:
     return None
 
 
-def _pregunta(mercado: str, bots: str) -> str:
-    return f"""Busca primero si hay algun evento de mercado relevante en las
-ultimas 24 horas. Luego valora el contexto con estos datos.
-
+def _pregunta(mercado: str, bots: str, noticias: str = "") -> str:
+    bloque = f"\n\nTitulares recientes:\n{noticias}\n" if noticias else ""
+    return f"""Valora el contexto con estos datos.{bloque}
 Estado del mercado (ultimas 200 velas de 1h):
 {mercado}
 
@@ -248,7 +298,8 @@ Momento actual: {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC
 ¿Hay alguna razon de contexto para dejar de abrir posiciones nuevas?"""
 
 
-def _consultar_anthropic(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
+def _consultar_anthropic(mercado: str, bots: str,
+                         noticias: str = "") -> tuple[VeredictoIA | None, str | None]:
     try:
         import anthropic
     except ImportError:
@@ -266,7 +317,8 @@ def _consultar_anthropic(mercado: str, bots: str) -> tuple[VeredictoIA | None, s
             # la factura.
             tools=[{"type": "web_search_20260209", "name": "web_search",
                     "max_uses": 4}],
-            messages=[{"role": "user", "content": _pregunta(mercado, bots)}],
+            messages=[{"role": "user",
+                       "content": _pregunta(mercado, bots, noticias)}],
             output_format=VeredictoIA,
         )
         if respuesta.stop_reason == "refusal":
@@ -276,7 +328,8 @@ def _consultar_anthropic(mercado: str, bots: str) -> tuple[VeredictoIA | None, s
         return None, f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
-def _consultar_groq(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
+def _consultar_groq(mercado: str, bots: str,
+                    noticias: str = "") -> tuple[VeredictoIA | None, str | None]:
     """Consulta a Groq. Gratis y rapido, con busqueda web en los modelos compound.
 
     Groq usa una API estilo OpenAI, asi que el esquema se pasa como
@@ -289,8 +342,15 @@ def _consultar_groq(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | 
         return None, "falta el paquete groq (uv pip install groq)"
 
     esquema = VeredictoIA.model_json_schema()
-    # `strict` exige que el esquema prohiba propiedades extra.
+    # El modo estricto de Groq es mas exigente que el de Anthropic: obliga a que
+    # `required` incluya TODAS las propiedades y a prohibir las extra. Pydantic
+    # solo marca como obligatorias las que no tienen valor por defecto, asi que
+    # hay que completarlo a mano.
+    #
+    # No cambia la semantica: los campos opcionales siguen aceptando lista
+    # vacia, solo que ahora el modelo debe emitirlos explicitamente.
     esquema["additionalProperties"] = False
+    esquema["required"] = list(esquema.get("properties", {}))
 
     try:
         cliente = Groq(timeout=120.0)
@@ -298,7 +358,7 @@ def _consultar_groq(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | 
             model=MODELO_GROQ,
             messages=[
                 {"role": "system", "content": INSTRUCCIONES},
-                {"role": "user", "content": _pregunta(mercado, bots)},
+                {"role": "user", "content": _pregunta(mercado, bots, noticias)},
             ],
             response_format={
                 "type": "json_schema",
@@ -313,14 +373,17 @@ def _consultar_groq(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | 
         return None, f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
-def consultar(mercado: str, bots: str) -> tuple[VeredictoIA | None, str | None]:
+def consultar(mercado: str, bots: str,
+              noticias: str = "") -> tuple[VeredictoIA | None, str | None]:
     """Devuelve (veredicto, error). Nunca lanza: un fallo aqui no puede parar el bot."""
     proveedor = proveedor_disponible()
     if proveedor is None:
         return None, "sin ANTHROPIC_API_KEY ni GROQ_API_KEY"
     if proveedor == "anthropic":
-        return _consultar_anthropic(mercado, bots)
-    return _consultar_groq(mercado, bots)
+        # Claude busca por su cuenta con la herramienta del servidor; ademas se
+        # le pasan los titulares por si la busqueda falla.
+        return _consultar_anthropic(mercado, bots, noticias)
+    return _consultar_groq(mercado, bots, noticias)
 
 
 # ---------------------------------------------------------------------------
@@ -371,15 +434,18 @@ def leer_decision() -> dict | None:
 def evaluar(datadir: Path, pares: list[str], verboso: bool = True) -> dict:
     mercado = contexto_mercado(datadir, pares)
     bots = contexto_bots()
+    noticias = contexto_noticias()
 
     if verboso:
         print("Mercado:")
         print(mercado)
         print("\nBots:")
         print(bots)
+        print("\nNoticias:")
+        print(noticias)
         print()
 
-    veredicto, error = consultar(mercado, bots)
+    veredicto, error = consultar(mercado, bots, noticias)
     decision = escribir_decision(veredicto, error)
 
     marca = "OPERAR" if decision["operar"] else "PAUSAR"

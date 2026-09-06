@@ -260,3 +260,52 @@ def test_los_dos_proveedores_piden_salida_estructurada():
     assert "output_format=VeredictoIA" in fuente, "Anthropic sin esquema"
     assert '"type": "json_schema"' in fuente, "Groq sin esquema"
     assert '"strict": True' in fuente, "Groq sin modo estricto"
+
+
+def test_las_noticias_se_traen_de_fuentes_fijas():
+    """Fuentes controladas, no busqueda libre del modelo.
+
+    Dos evaluaciones seguidas deben comparar lo mismo. Si el modelo buscara por
+    su cuenta traeria resultados distintos cada vez, y seria imposible saber si
+    cambio el mercado o cambio la busqueda.
+    """
+    import filtro_ia
+
+    assert len(filtro_ia.FUENTES_NOTICIAS) >= 3
+    for url in filtro_ia.FUENTES_NOTICIAS.values():
+        assert url.startswith("https://"), "las fuentes deben ir por HTTPS"
+
+
+def test_sin_red_el_filtro_no_se_rompe(monkeypatch):
+    """Un fallo leyendo noticias no puede tumbar la evaluacion.
+
+    El filtro es una ayuda; si su fuente de contexto falla, se evalua sin ella y
+    se dice. Lo que no puede es propagar la excepcion y dejar al vigilante sin
+    hacer su ronda.
+    """
+    import requests
+
+    import filtro_ia
+
+    def fallar(*a, **k):
+        raise requests.RequestException("sin red")
+
+    monkeypatch.setattr(filtro_ia.requests, "get", fallar)
+    texto = filtro_ia.contexto_noticias()
+    assert "no se pudieron leer" in texto.lower()
+
+
+def test_el_esquema_de_groq_marca_todo_como_obligatorio():
+    """El modo estricto de Groq exige `required` con todas las propiedades.
+
+    Pydantic solo marca las que no tienen valor por defecto, asi que hay que
+    completarlo. Sin esto la API responde 400 y el filtro queda inutilizado sin
+    mas sintoma que "no disponible" en el log.
+    """
+    import inspect
+
+    import filtro_ia
+
+    fuente = inspect.getsource(filtro_ia._consultar_groq)
+    assert 'esquema["required"] = list(esquema.get("properties", {}))' in fuente
+    assert 'esquema["additionalProperties"] = False' in fuente
