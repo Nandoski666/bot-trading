@@ -1,0 +1,23 @@
+# Finales de linea: la trampa numero uno al mover este repo a Windows.
+#
+# Git en Windows convierte LF a CRLF al clonar. Para un .py da igual, pero un
+# script .sh con CRLF falla dentro de Docker con un error incomprensible
+# ("/usr/bin/env: 'bash\r': No such file or directory"), y lo mismo le pasa al
+# entrypoint del contenedor del vigilante.
+#
+# Estas reglas fuerzan LF en todo lo que un contenedor Linux va a ejecutar,
+# independientemente del sistema donde se clone.
+
+*               text=auto eol=lf
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+.env.example    text eol=lf
+
+# Binarios: que Git no los toque.
+*.feather       binary
+*.zip           binary
+*.png           binary
+*.sqlite        binary

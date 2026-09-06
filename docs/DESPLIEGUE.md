@@ -20,10 +20,70 @@ medir de verdad no aporta nada.
 
 ---
 
+## Windows: los tres tropiezos, antes de empezar
+
+Si el destino es un PC con Windows, esto es lo que falla y por qué. Resuélvelo
+antes y el resto es copiar y pegar.
+
+### 1. WSL2 — Docker lo necesita
+
+Docker Desktop en Windows corre sobre WSL2. En PowerShell **como
+administrador**:
+
+```powershell
+wsl --install
+```
+
+Reinicia cuando lo pida. Sin esto, Docker Desktop no arranca.
+
+### 2. Finales de línea — el fallo más desconcertante
+
+Git en Windows convierte los saltos de línea a formato Windows (CRLF). Para un
+`.py` da igual, pero un `.sh` con CRLF **falla dentro del contenedor Linux** con
+un error que no dice nada:
+
+```
+/usr/bin/env: 'bash': No such file or directory
+```
+
+El repositorio ya lleva un `.gitattributes` que fuerza LF, así que clonando
+normal no debería pasar. Si aun así ocurre:
+
+```bash
+git config core.autocrlf false
+git rm --cached -r .
+git reset --hard
+```
+
+### 3. Suspensión — el mismo problema del Mac
+
+**Configuración → Sistema → Inicio/apagado y suspensión:**
+
+| | |
+|---|---|
+| Apagar pantalla | lo que quieras, no afecta |
+| **Suspender** | **Nunca** ← esto es lo importante |
+
+Un PC suspendido para los bots igual que un portátil dormido. Ya vimos lo que
+cuesta: una posición perdió el doble de su límite porque nadie ejecutó su stop
+durante 18 horas.
+
+### Dónde ejecutar los comandos
+
+Los scripts `.sh` de este proyecto necesitan **Git Bash**, que viene incluido
+con [Git para Windows](https://git-scm.com/download/win). Botón derecho en la
+carpeta → *Open Git Bash here*.
+
+En PowerShell funcionan los comandos `docker compose` y `python`, pero no los
+`./tools/*.sh`.
+
+---
+
 ## 1. Requisitos en la máquina destino
 
-- **Docker** (Desktop en Windows/macOS, Engine en Linux)
-- **git**
+- **Docker Desktop** (en Windows requiere WSL2 — ver arriba)
+- **git** (en Windows, incluye Git Bash, que hace falta para los scripts)
+- **Python 3.11 o 3.12** para las herramientas de diagnóstico
 - **4 GB de RAM libres** — el sistema usa ~2,5 GB
 - **20 GB de disco** — datos históricos y modelos
 
@@ -148,8 +208,11 @@ Los contenedores llevan `restart: unless-stopped`, así que vuelven solos.
 
 ### Windows
 
-Docker Desktop → **Settings → General → Start Docker Desktop when you log in**.
-Y en las opciones de energía, **«Nunca» suspender** con el equipo enchufado.
+1. Docker Desktop → **Settings → General → Start Docker Desktop when you log in**
+2. Configuración → Sistema → Inicio/apagado → **Suspender: Nunca**
+3. Si el PC tiene contraseña, Windows no llega al escritorio tras un reinicio
+   automático y Docker no arranca. Considera activar el inicio de sesión
+   automático, o acepta tener que entrar tú tras cada corte de luz.
 
 ### macOS
 

@@ -61,6 +61,16 @@ LIBRE=$(df -Pk . | awk 'NR==2{print int($4/1024/1024)}')
                       || aviso "disco libre: ${LIBRE} GB — se recomiendan 20 GB"
 
 echo
+echo "Integridad de los archivos"
+if [[ -f docker-compose.yml ]] && grep -q $'\r' docker-compose.yml 2>/dev/null; then
+    mal "los archivos tienen finales de linea de Windows (CRLF)"
+    nota "los contenedores Linux fallaran. Arregla con:"
+    nota "  git config core.autocrlf false && git rm --cached -r . && git reset --hard"
+else
+    ok "finales de linea correctos (LF)"
+fi
+
+echo
 echo "Configuracion"
 if [[ -f .env ]]; then
     ok ".env existe"
@@ -124,6 +134,34 @@ case "$(uname)" in
         mal "el equipo se suspende a los ${dormir:-?} min — los bots se paran con el"
         nota "Ajustes del Sistema -> impedir que se duerma con la pantalla apagada"
         nota "apano temporal:  nohup caffeinate -is >/dev/null 2>&1 &"
+    fi
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    # Git Bash en Windows. Las comprobaciones se hacen con herramientas de
+    # Windows a traves de powershell.exe.
+    if powershell.exe -NoProfile -Command \
+        "(Get-CimInstance Win32_StartupCommand | Where-Object {\$_.Command -like '*Docker Desktop*'}) -ne \$null" 2>/dev/null | grep -qi true; then
+        ok "Docker Desktop arranca al iniciar sesion"
+    else
+        aviso "no se pudo confirmar que Docker Desktop arranque solo"
+        nota "Docker Desktop -> Settings -> General -> Start Docker Desktop when you log in"
+    fi
+
+    # Un PC que se suspende para los bots igual que un portatil.
+    modo=$(powershell.exe -NoProfile -Command "powercfg /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE" 2>/dev/null | tr -d "\r")
+    if echo "$modo" | grep -qiE "Indice de configuracion actual de CA: 0x00000000|Current AC Power Setting Index: 0x00000000"; then
+        ok "el equipo no se suspende con corriente"
+    else
+        aviso "revisa que el equipo NO se suspenda: Configuracion -> Sistema -> Inicio/apagado"
+        nota "'Suspension' debe estar en Nunca. La pantalla si puede apagarse."
+    fi
+
+    # WSL2 es el backend que Docker Desktop necesita en Windows.
+    if command -v wsl.exe >/dev/null 2>&1; then
+        ok "WSL disponible (backend de Docker Desktop)"
+    else
+        mal "falta WSL — Docker Desktop lo necesita en Windows"
+        nota "en PowerShell como administrador:  wsl --install"
     fi
     ;;
   *) aviso "sistema no reconocido: comprueba el arranque automatico a mano" ;;
